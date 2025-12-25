@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  db:
+    # Usamos la imagen de PostGIS de Kartoza o Postgis oficial
+    image: postgis/postgis:15-3.3
+    container_name: castle_postgis_db
+    restart: always
+    environment:
+      # Estos datos coinciden con tu configuración de Node.js
+      POSTGRES_USER: postgres
+      POSTGRES_PASS: test_password_123
+      POSTGRES_DB: map_tracker_db
+      # Nota: Algunas imágenes usan POSTGRES_PASSWORD
+      POSTGRES_PASSWORD: test_password_123
+    ports:
+      # Mapeamos el puerto 5433 de tu laptop al 5432 del contenedor
+      - "5433:5432"
+    volumes:
+      - postgres_castle_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_castle_data:
