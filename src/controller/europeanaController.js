@@ -3,7 +3,7 @@ import { getExpandedSearchTerms } from '../utils/synonyms.js';
 import axios from 'axios';
 
 // ==========================================
-// 1. SERVER MANAGEMENT (RESILIENT MODE)
+// 1. GESTIÓN DE SERVIDORES
 // ==========================================
 const OVERPASS_SERVERS = [
     'https://overpass-api.de/api/interpreter',
@@ -12,9 +12,8 @@ const OVERPASS_SERVERS = [
     'https://overpass.openstreetmap.ru/api/interpreter'
 ];
 
-const fetchOverpassData = async (query, timeoutMs = 45000) => {
+const fetchOverpassData = async (query, timeoutMs = 60000) => {
     let servers = [...OVERPASS_SERVERS].sort(() => 0.5 - Math.random());
-
     for (const serverUrl of servers) {
         console.log(`📡 Testing Overpass: ${serverUrl}...`);
         try {
@@ -32,7 +31,7 @@ const fetchOverpassData = async (query, timeoutMs = 45000) => {
 };
 
 // ==========================================
-// 2. CONFIGURATION
+// 2. CONFIGURACIÓN
 // ==========================================
 const DENSE_CITIES = [
     'tokyo', 'osaka', 'seoul', 'beijing', 'shanghai', 'hong kong', 'bangkok', 'delhi', 'mumbai',
@@ -43,7 +42,7 @@ const DENSE_CITIES = [
 ];
 
 // ==========================================
-// 3. HELPERS (EXTERNAL APIS)
+// 3. HELPERS
 // ==========================================
 function getBoundingBox(lat, lon, zoomLevel) {
     const earthCircumference = 40075;
@@ -55,6 +54,16 @@ function getBoundingBox(lat, lon, zoomLevel) {
         south: parseFloat(lat) - latDelta, north: parseFloat(lat) + latDelta,
         west: parseFloat(lon) - lonDelta, east: parseFloat(lon) + lonDelta
     };
+}
+
+async function getReverseNominatim(lat, lon) {
+    try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=12&addressdetails=1&accept-language=es`; 
+        const res = await axios.get(url, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
+        const addr = res.data?.address;
+        if (addr) return addr.neighbourhood || addr.suburb || addr.city || addr.town || addr.village || addr.municipality || "Ubicación Detectada";
+        return "Zona Explorada";
+    } catch (e) { return "Zona Explorada"; }
 }
 
 async function getNominatimData(locationName) {
@@ -76,12 +85,36 @@ async function getNominatimData(locationName) {
     } catch (e) { return null; }
 }
 
+// --- WIKIPEDIA POR GPS ---
 async function getWikipediaData(lat, lon) {
     try {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
             ggscoord: `${lat}|${lon}`, ggsradius: '500', ggslimit: '1',
+            prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
+        });
+        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
+        const pages = response.data?.query?.pages;
+        if (!pages) return null;
+        const pageId = Object.keys(pages)[0];
+        const pageData = pages[pageId];
+        return {
+            hasData: true,
+            title: pageData.title,
+            description: pageData.extract ? pageData.extract.substring(0, 400) + "..." : null,
+            imageUrl: pageData.thumbnail?.source || null
+        };
+    } catch (e) { return null; }
+}
+
+// --- NUEVO: WIKIPEDIA POR NOMBRE (SOLUCIÓN A FOTOS NULL) ---
+async function getWikipediaDataByName(name) {
+    try {
+        const baseUrl = 'https://es.wikipedia.org/w/api.php'; // Buscamos en español
+        const params = new URLSearchParams({
+            action: 'query', format: 'json', generator: 'search',
+            gsrsearch: name, gsrlimit: '1', 
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
@@ -122,42 +155,48 @@ async function getMapillaryImage(lat, lon) {
 }
 
 // ==========================================
-// 4. WORKER DE FOTOS (CONTROLADO)
+// 4. WORKER DE FOTOS INTELIGENTE
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
-    
     const BATCH_SIZE = 5; 
-    
     for (let i = 0; i < elements.length; i += BATCH_SIZE) {
         const batch = elements.slice(i, i + BATCH_SIZE);
-        
         await Promise.all(batch.map(async (item) => {
             try {
+                // Solo si no tiene foto
                 if (!item.images || item.images.length === 0 || item.images[0] === null) {
                     const name = item.name || item.tags?.['name:en'] || item.tags?.name; 
                     const lat = item.latitude || item.lat;
                     const lon = item.longitude || item.lon;
 
-                    if (name && lat && lon) {
+                    if (name) {
                         let imageList = [];
                         let finalDesc = null;
                         
-                        // 1. Wikipedia
-                        const wikiData = await getWikipediaData(lat, lon);
+                        // 1. Wikipedia por GPS
+                        let wikiData = null;
+                        if (lat && lon) wikiData = await getWikipediaData(lat, lon);
+
+                        // 2. Wikipedia por NOMBRE (Si el GPS falló)
+                        if (!wikiData?.hasData || !wikiData?.imageUrl) {
+                            const cleanName = name.replace(/The |El |La /g, ''); 
+                            wikiData = await getWikipediaDataByName(cleanName);
+                        }
+
                         if (wikiData?.hasData) {
                             if (wikiData.imageUrl) imageList.push(wikiData.imageUrl);
                             finalDesc = wikiData.description;
                         }
                         
-                        // 2. Commons
+                        // 3. Commons
                         if (imageList.length === 0) {
                             const gallery = await getCommonsImages(name);
                             if (gallery.length > 0) imageList.push(...gallery);
                         }
 
-                        // 3. Mapillary
-                        if (imageList.length === 0) {
+                        // 4. Mapillary
+                        if (imageList.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
                             if (streetPhoto) imageList.push(streetPhoto);
                         }
@@ -165,27 +204,62 @@ const processImagesInBatches = async (elements) => {
                         if (imageList.length > 0 || finalDesc) {
                             const postgresArray = `{${[...new Set(imageList)].map(url => `"${url}"`).join(',')}}`;
                             const mainImage = imageList[0] || null;
-                            await db.raw(`UPDATE historical_locations SET images = ?, image_url = ?, description = COALESCE(?, description) WHERE name = ?`, [postgresArray, mainImage, finalDesc, name]);
+                            // Actualizamos la DB
+                            await db.raw(`UPDATE historical_locations SET images = ?, image_url = ?, description = COALESCE(?, description) WHERE name = ?`, [postgresArray, mainImage, finalDesc || "Información histórica no disponible.", name]);
+                            console.log(`📸 Foto actualizada: ${name}`);
                         }
                     }
                 }
             } catch (err) { /* Silent fail */ }
         }));
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 200));
     }
 };
 
+// ==========================================
+// 5. "EL PORTERO" (FILTRO DE SEGURIDAD)
+// ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
     const insertPromises = elements.map(async (item) => {
-        const name = item.tags?.['name:en'] || item.tags?.name || item.tags?.['name:es']; 
+        const t = item.tags || {};
+        const name = t['name:en'] || t.name || t['name:es']; 
         if (!name) return null;
+
+        // ⛔ FILTRO ANTI-TRANSPORTE ⛔
+        if (
+            t.railway ||                       
+            t.public_transport ||              
+            t.highway === 'bus_stop' ||        
+            t.amenity === 'bus_station' ||     
+            t.amenity === 'taxi' ||            
+            t.amenity === 'ferry_terminal' ||  
+            t.amenity === 'bicycle_rental' ||
+            name.toLowerCase().includes('subte') ||
+            name.toLowerCase().includes('estación') ||
+            name.toLowerCase().includes('station') ||
+            name.toLowerCase().includes('parada') ||
+            name.toLowerCase().includes('terminal')
+        ) {
+            return null; // A la basura
+        }
+
         const iLat = item.lat || item.center?.lat;
         const iLon = item.lon || item.center?.lon;
+        
         let cat = 'Others';
-        if (item.tags.historic === 'ruins') cat = 'Ruins';
-        else if (item.tags.tourism === 'museum') cat = 'Museums';
-        else if (['castle', 'fortress', 'citywalls'].includes(item.tags.historic)) cat = 'Castles';
-        const safeAddress = locationLabel.length > 90 ? locationLabel.substring(0, 90) + '...' : locationLabel;
+        if (t.historic === 'ruins') cat = 'Ruins';
+        else if (t.tourism === 'museum') cat = 'Museums';
+        else if (['castle', 'fortress', 'citywalls', 'manor', 'palace'].includes(t.historic)) cat = 'Castles';
+        else if (t.historic === 'monument' || t.historic === 'memorial') cat = 'Monuments';
+        else if (t.historic === 'building') cat = 'Historic Site';
+        else if (t.tourism === 'attraction') cat = 'Historic Site';
+        else if (t.tourism === 'artwork') cat = 'Monuments'; 
+
+        let finalAddress = locationLabel;
+        const city = t['addr:city'] || t['addr:town'] || t['addr:village'];
+        const street = t['addr:street'];
+        if (city) finalAddress = street ? `${street}, ${city}` : city;
+        const safeAddress = finalAddress.length > 90 ? finalAddress.substring(0, 90) + '...' : finalAddress;
         
         return db.raw(`INSERT INTO historical_locations (name, category, description, country, geom) VALUES (?, ?, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326)) ON CONFLICT (name) DO NOTHING`, [name, cat, 'Discovered via exploration.', safeAddress, iLon, iLat]);
     });
@@ -193,25 +267,21 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// 5. CONTROLADOR PRINCIPAL ACTUALIZADO
-// ==========================================
-// ==========================================
-// 5. CONTROLADOR PRINCIPAL (CON FILTRO DE RADIO)
+// 6. CONTROLADOR PRINCIPAL
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
     req.setTimeout(120000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
+    const limit = parseInt(req.query.limit) || 50; // Límite Alto
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 15;
     const offset = (page - 1) * limit;
 
     try {
         let selectValues = [], whereValues = [], orderValues = [];
         let selectFields = `id, name, category, image_url, images, description, country, ST_X(geom) AS longitude, ST_Y(geom) AS latitude`;
         
-        // 1. SELECT: Calcular distancia si hay coordenadas
         if (lat && lon) {
             selectFields += `, ST_Distance(geom::geography, ST_MakePoint(?, ?)::geography) as distance_meters`;
             selectValues.push(parseFloat(lon), parseFloat(lat)); 
@@ -219,15 +289,12 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // --- 2. WHERE: FILTRO DE DISTANCIA (EL FIX CLAVE) ---
-        // Si nos pasan lat/lon, filtramos SOLO cosas a menos de 50km.
-        // Esto evita que al buscar "Mendoza" te traiga "Bariloche" solo porque ya estaba en la DB.
+        // --- RADIO SQL: 80km (80000m) ---
         if (lat && lon) {
-            baseWhere += ` AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, 50000)`; // Radio 50km
+            baseWhere += ` AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, 80000)`; 
             whereValues.push(parseFloat(lon), parseFloat(lat));
         }
 
-        // Filtro Texto
         const searchTerms = getExpandedSearchTerms(search); 
         if (searchTerms.length > 0) {
             const orConditions = [];
@@ -238,13 +305,11 @@ export const getLocalizaciones = async (req, res) => {
             baseWhere += ` AND (${orConditions.join(' OR ')})`;
         }
         
-        // Filtro Categoría
         if (category && category !== 'All') {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
         }
 
-        // 3. ORDER BY: Cercanía
         let orderByClause = `ORDER BY id DESC`; 
         if (lat && lon) {
             orderByClause = `ORDER BY geom <-> ST_SetSRID(ST_MakePoint(?, ?), 4326)`;
@@ -254,12 +319,11 @@ export const getLocalizaciones = async (req, res) => {
         const finalQuery = `SELECT ${selectFields} ${baseWhere} ${orderByClause} LIMIT ? OFFSET ?`;
         const allValues = [...selectValues, ...whereValues, ...orderValues, limit, offset];
         
-        // --- 1. INTENTO LEER DB LOCAL ---
         const initialResult = await db.raw(finalQuery, allValues);
         let dataToSend = initialResult.rows;
 
         // ===========================================================================
-        // CASO A: BÚSQUEDA POR TEXTO (Ej: "London")
+        // CASO A: BÚSQUEDA POR TEXTO (Ej: "Buenos Aires")
         // ===========================================================================
         if (page === 1 && dataToSend.length === 0 && search.length > 3) {
             console.log(`🔎 [Caso A] Buscando Texto: "${search}"`);
@@ -276,16 +340,22 @@ export const getLocalizaciones = async (req, res) => {
                     if (nominatimInfo.bbox && !isDenseCity) bbox = nominatimInfo.bbox;
                     else bbox = getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, isDenseCity ? 13.5 : 12);
                     
-                    const maxResults = isDenseCity ? 25 : 60;
+                    const maxResults = 200;
                     console.log(`🌍 Explorando Texto (Overpass) | Límite: ${maxResults}`);
 
-                    const query = `[out:json][timeout:30];(nwr["historic"~"castle|fortress|ruins"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east}););out center ${maxResults};`;
-                    const elements = await fetchOverpassData(query, 60000);
+                    const query = `
+                        [out:json][timeout:60];
+                        (
+                            nwr["historic"~"castle|fortress|ruins|monument|memorial|manor|building|archaeological_site|battlefield"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                            nwr["tourism"~"museum|artwork|viewpoint|attraction|gallery"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                        );
+                        out center ${maxResults};
+                    `;
+
+                    const elements = await fetchOverpassData(query, 90000);
 
                     if (elements.length > 0) {
                         await insertElementsToDB(elements, nominatimInfo.displayName);
-                        // Truco: Para volver a leer sin aplicar el filtro de lat/lon estricto (ya que es búsqueda por texto)
-                        // podríamos reusar la query, pero aquí está bien porque 'search' está presente.
                         const tempResult = await db.raw(finalQuery, allValues);
                         const itemsToProcess = tempResult.rows;
                         if (itemsToProcess.length > 0) {
@@ -298,62 +368,60 @@ export const getLocalizaciones = async (req, res) => {
                         const finalResult = await db.raw(finalQuery, allValues);
                         dataToSend = finalResult.rows;
                     }
-                } else {
-                    // Lógica POI (omitida para brevedad, es la misma de siempre)
                 }
             }
         }
 
         // ===========================================================================
-        // CASO B: BÚSQUEDA POR COORDENADAS (Dropdown seleccionado)
+        // CASO B: BÚSQUEDA POR COORDENADAS (Inteligente)
         // ===========================================================================
-        else if (page === 1 && dataToSend.length === 0 && lat && lon) {
-            console.log(`📍 [Caso B] Buscando Coordenadas: [${lat}, ${lon}]`);
-            console.log("⚠️ DB Local vacía para esta zona (Radio 50km). Consultando Overpass...");
+        else if (page === 1 && lat && lon) { 
+            // 💡 Condición: ¿Tengo cosas CERCA (< 3km)?
+            const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
             
-            const bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 13);
-            const maxResults = 30;
-            const query = `
-                [out:json][timeout:30];
-                (
-                    nwr["historic"="castle"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"="fortress"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"="ruins"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                );
-                out center ${maxResults}; 
-            `;
-
-            const elements = await fetchOverpassData(query, 60000);
-
-            if (elements.length > 0) {
-                await insertElementsToDB(elements, "Zona Explorada");
+            if (dataToSend.length < 10 || nearbyItems.length < 3) {
+                console.log(`📍 [Caso B] Zona vacía cerca del usuario (${nearbyItems.length} items < 3km). Buscando...`);
                 
-                // Recargamos DB
-                const tempResult = await db.raw(finalQuery, allValues);
-                const itemsToProcess = tempResult.rows;
+                const areaName = await getReverseNominatim(lat, lon);
+                console.log(`📍 Zona detectada: ${areaName}`);
 
-                if (itemsToProcess.length > 0) {
-                    const priorityBatch = itemsToProcess.slice(0, 1);
-                    const backgroundBatch = itemsToProcess.slice(1);
+                const bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 12);
+                const maxResults = 200; 
+                
+                const query = `
+                    [out:json][timeout:60];
+                    (
+                        nwr["historic"~"castle|fortress|ruins|monument|memorial|manor|building|archaeological_site|battlefield"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                        nwr["tourism"~"museum|artwork|viewpoint|attraction|gallery"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    );
+                    out center ${maxResults}; 
+                `;
 
-                    console.log(`🚀 Coordenadas VIP: Procesando 1. Background: ${backgroundBatch.length}`);
-                    await Promise.race([
-                        processImagesInBatches(priorityBatch),
-                        new Promise(resolve => setTimeout(resolve, 3000))
-                    ]);
+                const elements = await fetchOverpassData(query, 90000);
 
-                    if (backgroundBatch.length > 0) {
-                        processImagesInBatches(backgroundBatch).catch(err => console.error("Bg Error:", err));
+                if (elements.length > 0) {
+                    await insertElementsToDB(elements, areaName);
+                    
+                    const tempResult = await db.raw(finalQuery, allValues);
+                    const itemsToProcess = tempResult.rows;
+                    if (itemsToProcess.length > 0) {
+                        const priorityBatch = itemsToProcess.slice(0, 1);
+                        const backgroundBatch = itemsToProcess.slice(1);
+                        await Promise.race([
+                            processImagesInBatches(priorityBatch),
+                            new Promise(resolve => setTimeout(resolve, 3000))
+                        ]);
+                        if (backgroundBatch.length > 0) {
+                            processImagesInBatches(backgroundBatch).catch(console.error);
+                        }
                     }
+                    const finalResult = await db.raw(finalQuery, allValues);
+                    dataToSend = finalResult.rows;
                 }
-                
-                const finalResult = await db.raw(finalQuery, allValues);
-                dataToSend = finalResult.rows;
             }
         }
 
-        // --- 3. RELLENO DE FOTOS ---
+        // RELLENO DE FOTOS (Último intento)
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
              const vipFix = itemsSinFoto.slice(0, 1);
