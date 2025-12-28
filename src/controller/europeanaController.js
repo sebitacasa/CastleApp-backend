@@ -1,91 +1,36 @@
 import db from '../config/db.js';
-import { getExpandedSearchTerms } from '../utils/synonyms.js';
 import axios from 'axios';
+import { getExpandedSearchTerms } from '../utils/synonyms.js';
+
+import { DENSE_CITIES, getBoundingBox } from '../utils/geoUtils.js';
+import { 
+    fetchOverpassData, 
+    getNominatimData, 
+    getReverseNominatim 
+} from '../services/externalApis.js'; 
+// Nota: processImagesInBatches e insertElementsToDB los definimos aquí mismo ahora
+// para poder aplicar los filtros personalizados que pides.
 
 // ==========================================
-// 1. GESTIÓN DE SERVIDORES
+// 🚨 HELPER: DETECTOR DE TRANSPORTE
 // ==========================================
-const OVERPASS_SERVERS = [
-    'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    'https://overpass.openstreetmap.ru/api/interpreter'
-];
-
-const fetchOverpassData = async (query, timeoutMs = 60000) => {
-    let servers = [...OVERPASS_SERVERS].sort(() => 0.5 - Math.random());
-    for (const serverUrl of servers) {
-        console.log(`📡 Testing Overpass: ${serverUrl}...`);
-        try {
-            const osmRes = await axios.post(serverUrl, `data=${encodeURIComponent(query)}`, { 
-                timeout: timeoutMs, 
-                headers: { 'User-Agent': 'CastleApp/1.0' } 
-            });
-            if (osmRes.data && osmRes.data.elements) return osmRes.data.elements;
-        } catch (e) {
-            console.warn(`⚠️ Server ${serverUrl} failed. Skipping...`);
-        }
-    }
-    console.error("❌ All Overpass servers failed.");
-    return [];
+const isTransportContext = (text) => {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    return (
+        lower.includes('estacion linea') || 
+        lower.includes('estación línea') ||
+        lower.includes('station on line') || // Para el caso en inglés de tu foto
+        lower.includes('metro station') ||
+        lower.includes('subway station') ||
+        lower.includes('estación de subte') ||
+        lower.includes('estación de tren')
+    );
 };
 
 // ==========================================
-// 2. CONFIGURACIÓN
+// 2. HELPERS DE WIKIPEDIA (Requeridos aquí para el Worker)
 // ==========================================
-const DENSE_CITIES = [
-    'tokyo', 'osaka', 'seoul', 'beijing', 'shanghai', 'hong kong', 'bangkok', 'delhi', 'mumbai',
-    'london', 'londres', 'paris', 'rome', 'roma', 'berlin', 'madrid', 'barcelona', 'amsterdam', 
-    'venice', 'venecia', 'prague', 'vienna', 'budapest', 'istanbul', 'moscow',
-    'new york', 'nueva york', 'san francisco', 'los angeles', 'mexico city', 'cdmx', 'sao paulo', 
-    'buenos aires', 'rio de janeiro', 'bogota', 'lima', 'santiago', 'cairo', 'sydney'
-];
-
-// ==========================================
-// 3. HELPERS
-// ==========================================
-function getBoundingBox(lat, lon, zoomLevel) {
-    const earthCircumference = 40075;
-    const radiusKm = (earthCircumference * Math.cos(lat * Math.PI / 180)) / Math.pow(2, zoomLevel + 1); 
-    const EARTH_RADIUS = 6371;
-    const latDelta = (radiusKm / EARTH_RADIUS) * (180 / Math.PI);
-    const lonDelta = (radiusKm / EARTH_RADIUS) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
-    return {
-        south: parseFloat(lat) - latDelta, north: parseFloat(lat) + latDelta,
-        west: parseFloat(lon) - lonDelta, east: parseFloat(lon) + lonDelta
-    };
-}
-
-async function getReverseNominatim(lat, lon) {
-    try {
-        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=12&addressdetails=1&accept-language=es`; 
-        const res = await axios.get(url, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
-        const addr = res.data?.address;
-        if (addr) return addr.neighbourhood || addr.suburb || addr.city || addr.town || addr.village || addr.municipality || "Ubicación Detectada";
-        return "Zona Explorada";
-    } catch (e) { return "Zona Explorada"; }
-}
-
-async function getNominatimData(locationName) {
-    try {
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(locationName)}&format=json&limit=1&addressdetails=1&accept-language=en`;
-        const res = await axios.get(url, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 6000 });
-        if (res.data && res.data.length > 0) {
-            const item = res.data[0];
-            return { 
-                displayName: item.display_name, type: item.type, class: item.class,
-                lat: parseFloat(item.lat), lon: parseFloat(item.lon),
-                bbox: item.boundingbox ? {
-                    south: parseFloat(item.boundingbox[0]), north: parseFloat(item.boundingbox[1]),
-                    west: parseFloat(item.boundingbox[2]), east: parseFloat(item.boundingbox[3])
-                } : null
-            };
-        }
-        return null;
-    } catch (e) { return null; }
-}
-
-// --- WIKIPEDIA POR GPS ---
 async function getWikipediaData(lat, lon) {
     try {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
@@ -108,10 +53,9 @@ async function getWikipediaData(lat, lon) {
     } catch (e) { return null; }
 }
 
-// --- NUEVO: WIKIPEDIA POR NOMBRE (SOLUCIÓN A FOTOS NULL) ---
 async function getWikipediaDataByName(name) {
     try {
-        const baseUrl = 'https://es.wikipedia.org/w/api.php'; // Buscamos en español
+        const baseUrl = 'https://es.wikipedia.org/w/api.php'; 
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
             gsrsearch: name, gsrlimit: '1', 
@@ -155,7 +99,7 @@ async function getMapillaryImage(lat, lon) {
 }
 
 // ==========================================
-// 4. WORKER DE FOTOS INTELIGENTE
+// 3. WORKER DE FOTOS (Con filtro de descripción)
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
@@ -164,7 +108,6 @@ const processImagesInBatches = async (elements) => {
         const batch = elements.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (item) => {
             try {
-                // Solo si no tiene foto
                 if (!item.images || item.images.length === 0 || item.images[0] === null) {
                     const name = item.name || item.tags?.['name:en'] || item.tags?.name; 
                     const lat = item.latitude || item.lat;
@@ -174,14 +117,23 @@ const processImagesInBatches = async (elements) => {
                         let imageList = [];
                         let finalDesc = null;
                         
-                        // 1. Wikipedia por GPS
                         let wikiData = null;
                         if (lat && lon) wikiData = await getWikipediaData(lat, lon);
 
-                        // 2. Wikipedia por NOMBRE (Si el GPS falló)
+                        // 🔥 FILTRO: Si Wikipedia trajo datos de una estación de subte, los BORRAMOS
+                        if (wikiData?.hasData && isTransportContext(wikiData.description)) {
+                            console.log(`🚫 Descripción de transporte detectada y descartada para: ${name}`);
+                            wikiData = null; // Anulamos los datos malos
+                        }
+
                         if (!wikiData?.hasData || !wikiData?.imageUrl) {
                             const cleanName = name.replace(/The |El |La /g, ''); 
                             wikiData = await getWikipediaDataByName(cleanName);
+                            
+                            // 🔥 RE-CHECK: Verificamos también la búsqueda por nombre
+                            if (wikiData?.hasData && isTransportContext(wikiData.description)) {
+                                wikiData = null;
+                            }
                         }
 
                         if (wikiData?.hasData) {
@@ -189,13 +141,11 @@ const processImagesInBatches = async (elements) => {
                             finalDesc = wikiData.description;
                         }
                         
-                        // 3. Commons
                         if (imageList.length === 0) {
                             const gallery = await getCommonsImages(name);
                             if (gallery.length > 0) imageList.push(...gallery);
                         }
 
-                        // 4. Mapillary
                         if (imageList.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
                             if (streetPhoto) imageList.push(streetPhoto);
@@ -204,7 +154,7 @@ const processImagesInBatches = async (elements) => {
                         if (imageList.length > 0 || finalDesc) {
                             const postgresArray = `{${[...new Set(imageList)].map(url => `"${url}"`).join(',')}}`;
                             const mainImage = imageList[0] || null;
-                            // Actualizamos la DB
+                            
                             await db.raw(`UPDATE historical_locations SET images = ?, image_url = ?, description = COALESCE(?, description) WHERE name = ?`, [postgresArray, mainImage, finalDesc || "Información histórica no disponible.", name]);
                             console.log(`📸 Foto actualizada: ${name}`);
                         }
@@ -217,7 +167,7 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 5. "EL PORTERO" (FILTRO DE SEGURIDAD)
+// 4. EL PORTERO (Con filtro de nombre)
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
     const insertPromises = elements.map(async (item) => {
@@ -225,22 +175,20 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         const name = t['name:en'] || t.name || t['name:es']; 
         if (!name) return null;
 
-        // ⛔ FILTRO ANTI-TRANSPORTE ⛔
+        // 🔥 FILTRO DE NOMBRE: Si el lugar se llama "Estación Línea D", adiós.
+        if (isTransportContext(name)) {
+            return null;
+        }
+
         if (
-            t.railway ||                       
-            t.public_transport ||              
-            t.highway === 'bus_stop' ||        
-            t.amenity === 'bus_station' ||     
-            t.amenity === 'taxi' ||            
-            t.amenity === 'ferry_terminal' ||  
-            t.amenity === 'bicycle_rental' ||
-            name.toLowerCase().includes('subte') ||
-            name.toLowerCase().includes('estación') ||
-            name.toLowerCase().includes('station') ||
-            name.toLowerCase().includes('parada') ||
+            t.railway || t.public_transport || t.highway === 'bus_stop' || 
+            t.amenity === 'bus_station' || t.amenity === 'taxi' || 
+            t.amenity === 'ferry_terminal' || t.amenity === 'bicycle_rental' ||
+            name.toLowerCase().includes('subte') || name.toLowerCase().includes('estación') ||
+            name.toLowerCase().includes('station') || name.toLowerCase().includes('parada') ||
             name.toLowerCase().includes('terminal')
         ) {
-            return null; // A la basura
+            return null; 
         }
 
         const iLat = item.lat || item.center?.lat;
@@ -267,14 +215,14 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// 6. CONTROLADOR PRINCIPAL
+// 5. CONTROLADOR PRINCIPAL: GET LOCALIZACIONES
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
     req.setTimeout(120000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
-    const limit = parseInt(req.query.limit) || 50; // Límite Alto
+    const limit = parseInt(req.query.limit) || 50; 
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
@@ -289,8 +237,8 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // --- RADIO SQL: 80km (80000m) ---
-        if (lat && lon) {
+        // --- RADIO SQL ---
+        if (lat && lon && !search) {
             baseWhere += ` AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, 80000)`; 
             whereValues.push(parseFloat(lon), parseFloat(lat));
         }
@@ -311,7 +259,7 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         let orderByClause = `ORDER BY id DESC`; 
-        if (lat && lon) {
+        if (lat && lon && !search) {
             orderByClause = `ORDER BY geom <-> ST_SetSRID(ST_MakePoint(?, ?), 4326)`;
             orderValues.push(parseFloat(lon), parseFloat(lat)); 
         }
@@ -322,11 +270,9 @@ export const getLocalizaciones = async (req, res) => {
         const initialResult = await db.raw(finalQuery, allValues);
         let dataToSend = initialResult.rows;
 
-        // ===========================================================================
-        // CASO A: BÚSQUEDA POR TEXTO (Ej: "Buenos Aires")
-        // ===========================================================================
+        // --- CASO A: BÚSQUEDA POR TEXTO ---
         if (page === 1 && dataToSend.length === 0 && search.length > 3) {
-            console.log(`🔎 [Caso A] Buscando Texto: "${search}"`);
+            console.log(`🔎 [Caso A] Buscando Texto Global: "${search}"`);
             const nominatimInfo = await getNominatimData(search);
             
             if (nominatimInfo && nominatimInfo.type !== 'country') {
@@ -341,7 +287,7 @@ export const getLocalizaciones = async (req, res) => {
                     else bbox = getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, isDenseCity ? 13.5 : 12);
                     
                     const maxResults = 200;
-                    console.log(`🌍 Explorando Texto (Overpass) | Límite: ${maxResults}`);
+                    console.log(`🌍 Explorando (Overpass) | Límite: ${maxResults}`);
 
                     const query = `
                         [out:json][timeout:60];
@@ -372,19 +318,14 @@ export const getLocalizaciones = async (req, res) => {
             }
         }
 
-        // ===========================================================================
-        // CASO B: BÚSQUEDA POR COORDENADAS (Inteligente)
-        // ===========================================================================
-        else if (page === 1 && lat && lon) { 
-            // 💡 Condición: ¿Tengo cosas CERCA (< 3km)?
+        // --- CASO B: BÚSQUEDA POR COORDENADAS ---
+        else if (page === 1 && lat && lon && !search) { 
             const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
             
             if (dataToSend.length < 10 || nearbyItems.length < 3) {
-                console.log(`📍 [Caso B] Zona vacía cerca del usuario (${nearbyItems.length} items < 3km). Buscando...`);
+                console.log(`📍 [Caso B] Zona GPS vacía. Buscando...`);
                 
                 const areaName = await getReverseNominatim(lat, lon);
-                console.log(`📍 Zona detectada: ${areaName}`);
-
                 const bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 12);
                 const maxResults = 200; 
                 
@@ -401,7 +342,6 @@ export const getLocalizaciones = async (req, res) => {
 
                 if (elements.length > 0) {
                     await insertElementsToDB(elements, areaName);
-                    
                     const tempResult = await db.raw(finalQuery, allValues);
                     const itemsToProcess = tempResult.rows;
                     if (itemsToProcess.length > 0) {
@@ -421,7 +361,7 @@ export const getLocalizaciones = async (req, res) => {
             }
         }
 
-        // RELLENO DE FOTOS (Último intento)
+        // RELLENO DE FOTOS
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
              const vipFix = itemsSinFoto.slice(0, 1);
