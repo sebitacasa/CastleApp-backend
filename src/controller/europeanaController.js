@@ -47,7 +47,7 @@ async function getWikipediaData(lat, lon) {
         return {
             hasData: true,
             title: pageData.title,
-            description: pageData.extract ? pageData.extract.substring(0, 400) + "..." : null,
+           description: pages[pageId].extract || null,
             imageUrl: pageData.thumbnail?.source || null
         };
     } catch (e) { return null; }
@@ -69,7 +69,7 @@ async function getWikipediaDataByName(name) {
         return {
             hasData: true,
             title: pageData.title,
-            description: pageData.extract ? pageData.extract.substring(0, 400) + "..." : null,
+            description: pageData.extract || null,
             imageUrl: pageData.thumbnail?.source || null
         };
     } catch (e) { return null; }
@@ -215,6 +215,24 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
+// ✅ NUEVO ENDPOINT: OBTENER DESCRIPCIÓN (Lazy Loading)
+// ==========================================
+export const getLocationDescription = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.raw(`SELECT description FROM historical_locations WHERE id = ?`, [id]);
+        if (result.rows.length > 0) {
+            res.json({ description: result.rows[0].description });
+        } else {
+            res.status(404).json({ error: "Lugar no encontrado" });
+        }
+    } catch (error) {
+        console.error("Error fetching description:", error);
+        res.status(500).json({ error: "Error de servidor" });
+    }
+};
+
+// ==========================================
 // 5. CONTROLADOR PRINCIPAL: GET LOCALIZACIONES
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
@@ -228,7 +246,23 @@ export const getLocalizaciones = async (req, res) => {
 
     try {
         let selectValues = [], whereValues = [], orderValues = [];
-        let selectFields = `id, name, category, image_url, images, description, country, ST_X(geom) AS longitude, ST_Y(geom) AS latitude`;
+        
+        // 🔥 CAMBIO: Usamos CASE/SUBSTRING para cortar la descripción en la lista
+        // Esto hace que la carga inicial sea rápida y ligera
+        let selectFields = `
+            id, 
+            name, 
+            category, 
+            image_url, 
+            images, 
+            CASE 
+                WHEN LENGTH(description) > 180 THEN LEFT(description, 180) || '...' 
+                ELSE description 
+            END AS description,
+            country, 
+            ST_X(geom) AS longitude, 
+            ST_Y(geom) AS latitude
+        `;
         
         if (lat && lon) {
             selectFields += `, ST_Distance(geom::geography, ST_MakePoint(?, ?)::geography) as distance_meters`;
