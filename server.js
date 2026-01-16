@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import cors from 'cors';
 import axios from 'axios';
 import castleRoutes from "./src/routes/catlesRoutes.js"
+import authRoutes from './src/routes/auth.routes.js';
 
 
 const app = express();
@@ -25,6 +26,8 @@ app.get('/', (req, res) => {
 
 // 1. MAIN ENDPOINT: SEARCH + FILTER + SAVE
 app.use('/api', castleRoutes);
+
+app.use('/auth', authRoutes);
 
 app.listen(port, () => {
     console.log(`🏰 Server running in ENGLISH at http://localhost:${port}`);
