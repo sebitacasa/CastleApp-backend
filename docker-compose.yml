@@ -10,7 +10,7 @@ services:
       # Estos datos coinciden con tu configuración de Node.js
       POSTGRES_USER: postgres
       POSTGRES_PASS: test_password_123
-      POSTGRES_DB: map_tracker_db
+      POSTGRES_DB: map_tracker_db2
       # Nota: Algunas imágenes usan POSTGRES_PASSWORD
       POSTGRES_PASSWORD: test_password_123
     ports:

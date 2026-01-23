@@ -4,6 +4,7 @@ import cors from 'cors';
 import axios from 'axios';
 import castleRoutes from "./src/routes/catlesRoutes.js"
 import authRoutes from './src/routes/auth.routes.js';
+import socialRoutes from './src/routes/socialRoutes.js'
 
 
 const app = express();
@@ -26,6 +27,7 @@ app.get('/', (req, res) => {
 
 // 1. MAIN ENDPOINT: SEARCH + FILTER + SAVE
 app.use('/api', castleRoutes);
+app.use('/social', socialRoutes);
 
 app.use('/auth', authRoutes);
 

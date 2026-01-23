@@ -8,8 +8,79 @@ import {
     getNominatimData, 
     getReverseNominatim 
 } from '../services/externalApis.js'; 
-// Nota: processImagesInBatches e insertElementsToDB los definimos aquí mismo ahora
-// para poder aplicar los filtros personalizados que pides.
+
+// ==========================================
+// 🧹 HELPER: LIMPIAR HTML
+// ==========================================
+const cleanWikiText = (html) => {
+    if (!html) return null;
+    return html.replace(/<[^>]*>?/gm, '').trim();
+};
+
+// ==========================================
+// 🧠 HELPER: COMPARADOR DE NOMBRES
+// ==========================================
+const areNamesSimilar = (name1, name2) => {
+    if (!name1 || !name2) return false;
+    const n1 = name1.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const n2 = name2.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    
+    if (n1.includes(n2) || n2.includes(n1)) return true;
+    
+    const words1 = n1.split(' ').filter(w => w.length >= 4);
+    const words2 = n2.split(' ');
+    const targetWords = words1.length > 0 ? words1 : n1.split(' ');
+    
+    return targetWords.some(w => words2.includes(w));
+};
+
+// ==========================================
+// 🚫 HELPER: DETECTOR DE PERSONAS Y BASURA (FILTRO ESTRICTO)
+// ==========================================
+const isInvalidContext = (text, categories = '') => {
+    if (!text && !categories) return false;
+    
+    const lowerText = (text + ' ' + categories).toLowerCase();
+
+    // 1. SALVOCONDUCTOS (Palabras de Lugares)
+    const placeKeywords = [
+        'located', 'situated', 'building', 'monument', 'statue', 'museum', 'castle', 
+        'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house of', 'tomb', 
+        'grave', 'memorial', 'bridge', 'theater', 'cinema', 'construction', 'tower',
+        'palace', 'fortress', 'mansion', 'site', 'venue', 'opened', 'founded', 'built',
+        'archaeological', 'temple', 'shrine'
+    ];
+
+    // 2. BANDERAS ROJAS - PERSONAS
+    const personKeywords = [
+        'was a', 'is a', 'born in', 'died in', 'born on', 'died on', 
+        'singer', 'actor', 'musician', 'politician', 'player', 'footballer', 
+        'writer', 'painter', 'poet', 'priest', 'soldier', 'general', 'king', 
+        'queen', 'prince', 'princess', 'composer', 'artist', 'athlete',
+        'chanteur', 'sänger', 'biography', 'people', 'living people', 'portrait'
+    ];
+
+    // 3. 🛑 BANDERAS ROJAS - BASURA / IRRELEVANTE (Aquí evitamos el boxer)
+    const trashKeywords = [
+        'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
+        'interior of', 'furniture', 'poster', 'advertisement', 'text', 'logo', 'icon',
+        'flag', 'coat of arms', 'signature', 'document', 'pdf', 'book cover',
+        'underwear', 'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
+        'insect', 'animal', 'plant', 'flower', 'fungi'
+    ];
+
+    const hasPlace = placeKeywords.some(w => lowerText.includes(w));
+    const hasPerson = personKeywords.some(w => lowerText.includes(w));
+    const hasTrash = trashKeywords.some(w => lowerText.includes(w));
+
+    // Si es basura, descartar SIEMPRE
+    if (hasTrash) return true;
+
+    // Si parece persona Y NO menciona explícitamente que es un lugar físico, descartar
+    if (hasPerson && !hasPlace) return true;
+
+    return false;
+};
 
 // ==========================================
 // 🚨 HELPER: DETECTOR DE TRANSPORTE
@@ -20,34 +91,44 @@ const isTransportContext = (text) => {
     return (
         lower.includes('estacion linea') || 
         lower.includes('estación línea') ||
-        lower.includes('station on line') || // Para el caso en inglés de tu foto
+        lower.includes('station on line') || 
         lower.includes('metro station') ||
         lower.includes('subway station') ||
-        lower.includes('estación de subte') ||
-        lower.includes('estación de tren')
+        lower.includes('train station') ||
+        lower.includes('railway station')
     );
 };
 
 // ==========================================
-// 2. HELPERS DE WIKIPEDIA (Requeridos aquí para el Worker)
+// 2. HELPERS DE WIKIPEDIA (AHORA SOLO INGLÉS)
 // ==========================================
-async function getWikipediaData(lat, lon) {
+async function getWikipediaData(lat, lon, targetName) {
     try {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '500', ggslimit: '1',
+            ggscoord: `${lat}|${lon}`, 
+            ggsradius: '250', 
+            ggslimit: '1',
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
         const pages = response.data?.query?.pages;
         if (!pages) return null;
+        
         const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
+        const description = pages[pageId].extract || "";
+
+        if (targetName && !areNamesSimilar(pageData.title, targetName)) return null;
+
+        // 🔥 FILTRO ESTRICTO
+        if (isInvalidContext(description)) return null;
+
         return {
             hasData: true,
             title: pageData.title,
-           description: pages[pageId].extract || null,
+            description: description,
             imageUrl: pageData.thumbnail?.source || null
         };
     } catch (e) { return null; }
@@ -55,7 +136,8 @@ async function getWikipediaData(lat, lon) {
 
 async function getWikipediaDataByName(name) {
     try {
-        const baseUrl = 'https://es.wikipedia.org/w/api.php'; 
+        const baseUrl = 'https://en.wikipedia.org/w/api.php'; 
+        
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
             gsrsearch: name, gsrlimit: '1', 
@@ -66,26 +148,65 @@ async function getWikipediaDataByName(name) {
         if (!pages) return null;
         const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
+        const description = pageData.extract || "";
+
+        if (isInvalidContext(description)) return null;
+
         return {
             hasData: true,
             title: pageData.title,
-            description: pageData.extract || null,
+            description: description,
             imageUrl: pageData.thumbnail?.source || null
         };
     } catch (e) { return null; }
 }
 
+// 🔥 FUNCIÓN OPTIMIZADA: Commons con Filtro de Contenido
 async function getCommonsImages(locationName) {
     try {
         const baseUrl = 'https://commons.wikimedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
-            gsrsearch: locationName, gsrnamespace: '6', gsrlimit: '3', prop: 'imageinfo', iiprop: 'url', origin: '*'
+            gsrsearch: locationName, gsrnamespace: '6', gsrlimit: '5', // Subimos el límite para tener de donde elegir si filtramos
+            prop: 'imageinfo', 
+            iiprop: 'url|extmetadata', 
+            iiurlwidth: '800', 
+            origin: '*'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
         const pages = response.data?.query?.pages;
         if (!pages) return [];
-        return Object.values(pages).map(p => p.imageinfo?.[0]?.url).filter(u => u); 
+        
+        const validImages = Object.values(pages).map(p => {
+            const info = p.imageinfo?.[0];
+            const meta = info?.extmetadata || {};
+            const categories = meta.Categories?.value || "";
+            const desc = meta.ImageDescription?.value || "";
+
+            // 🔥 FILTRO DE CONTEXTO (Basura / Personas)
+            if (isInvalidContext(desc, categories)) return null;
+
+            // 🔥 FILTRO DE FORMATO DE ARCHIVO (Solo imágenes reales)
+            const finalUrl = info?.thumburl || info?.url;
+            if (!finalUrl) return null;
+            
+            const lowerUrl = finalUrl.toLowerCase();
+            const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+            if (!validExtensions.some(ext => lowerUrl.includes(ext))) {
+                // Si es .tif, .svg, .pdf, lo descartamos porque React Native a veces falla con ellos
+                return null;
+            }
+
+            return {
+                url: finalUrl,
+                author: cleanWikiText(meta.Artist?.value),
+                license: meta.LicenseShortName?.value
+            };
+        }).filter(item => item !== null); 
+        
+        // Devolvemos solo las válidas (limitado a 3 después de filtrar)
+        return validImages.slice(0, 3);
+
     } catch (e) { return []; }
 }
 
@@ -99,7 +220,7 @@ async function getMapillaryImage(lat, lon) {
 }
 
 // ==========================================
-// 3. WORKER DE FOTOS (Con filtro de descripción)
+// 3. WORKER DE FOTOS
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
@@ -108,66 +229,104 @@ const processImagesInBatches = async (elements) => {
         const batch = elements.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (item) => {
             try {
-                if (!item.images || item.images.length === 0 || item.images[0] === null) {
+                const hasImages = item.images && item.images.length > 0 && item.images[0] !== null;
+                const missingAuthor = !item.author;
+
+                if (!hasImages || missingAuthor) {
                     const name = item.name || item.tags?.['name:en'] || item.tags?.name; 
                     const lat = item.latitude || item.lat;
                     const lon = item.longitude || item.lon;
 
                     if (name) {
-                        let imageList = [];
-                        let finalDesc = null;
-                        
+                        let bestCandidate = {
+                            imageUrl: null,
+                            images: [],
+                            description: null,
+                            author: null,
+                            license: null
+                        };
+
+                        // 1. INTENTO WIKIPEDIA
                         let wikiData = null;
-                        if (lat && lon) wikiData = await getWikipediaData(lat, lon);
+                        if (lat && lon) wikiData = await getWikipediaData(lat, lon, name);
 
-                        // 🔥 FILTRO: Si Wikipedia trajo datos de una estación de subte, los BORRAMOS
-                        if (wikiData?.hasData && isTransportContext(wikiData.description)) {
-                            console.log(`🚫 Descripción de transporte detectada y descartada para: ${name}`);
-                            wikiData = null; // Anulamos los datos malos
-                        }
-
+                        // Fallback
                         if (!wikiData?.hasData || !wikiData?.imageUrl) {
                             const cleanName = name.replace(/The |El |La /g, ''); 
                             wikiData = await getWikipediaDataByName(cleanName);
-                            
-                            // 🔥 RE-CHECK: Verificamos también la búsqueda por nombre
-                            if (wikiData?.hasData && isTransportContext(wikiData.description)) {
-                                wikiData = null;
-                            }
+                        }
+                        
+                        if (wikiData?.hasData) {
+                            if (isTransportContext(wikiData.description)) wikiData = null;
                         }
 
                         if (wikiData?.hasData) {
-                            if (wikiData.imageUrl) imageList.push(wikiData.imageUrl);
-                            finalDesc = wikiData.description;
+                            if (wikiData.imageUrl) {
+                                bestCandidate.imageUrl = wikiData.imageUrl;
+                                bestCandidate.images.push(wikiData.imageUrl);
+                            }
+                            bestCandidate.description = wikiData.description;
                         }
+
+                        // 2. INTENTO COMMONS
+                        const gallery = await getCommonsImages(name);
                         
-                        if (imageList.length === 0) {
-                            const gallery = await getCommonsImages(name);
-                            if (gallery.length > 0) imageList.push(...gallery);
+                        if (gallery.length > 0) {
+                            if (gallery[0].author) {
+                                bestCandidate.imageUrl = gallery[0].url; 
+                                bestCandidate.author = gallery[0].author;
+                                bestCandidate.license = gallery[0].license;
+                                const commonsUrls = gallery.map(g => g.url);
+                                bestCandidate.images = [...commonsUrls, ...bestCandidate.images]; 
+                            } else {
+                                bestCandidate.images.push(...gallery.map(g => g.url));
+                            }
                         }
 
-                        if (imageList.length === 0 && lat && lon) {
+                        // 3. INTENTO MAPILLARY
+                        if (bestCandidate.images.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
-                            if (streetPhoto) imageList.push(streetPhoto);
+                            if (streetPhoto) {
+                                bestCandidate.imageUrl = streetPhoto;
+                                bestCandidate.images.push(streetPhoto);
+                            }
                         }
 
-                        if (imageList.length > 0 || finalDesc) {
-                            const postgresArray = `{${[...new Set(imageList)].map(url => `"${url}"`).join(',')}}`;
-                            const mainImage = imageList[0] || null;
-                            
-                            await db.raw(`UPDATE historical_locations SET images = ?, image_url = ?, description = COALESCE(?, description) WHERE name = ?`, [postgresArray, mainImage, finalDesc || "Información histórica no disponible.", name]);
-                            console.log(`📸 Foto actualizada: ${name}`);
+                        // 4. GUARDAR
+                        if (bestCandidate.imageUrl || bestCandidate.description || bestCandidate.author) {
+                            const uniqueImages = [...new Set(bestCandidate.images)];
+                            const postgresArray = uniqueImages.length > 0 
+                                ? `{${uniqueImages.map(url => `"${url}"`).join(',')}}` 
+                                : item.images;
+                                
+                            await db.raw(
+                                `UPDATE historical_locations 
+                                 SET images = ?, 
+                                     image_url = ?, 
+                                     description = COALESCE(?, description),
+                                     author = ?,
+                                     license = ?
+                                 WHERE name = ?`, 
+                                [
+                                    postgresArray, 
+                                    bestCandidate.imageUrl || item.image_url,
+                                    bestCandidate.description,
+                                    bestCandidate.author || item.author,
+                                    bestCandidate.license || item.license,
+                                    name
+                                ]
+                            );
                         }
                     }
                 }
-            } catch (err) { /* Silent fail */ }
+            } catch (err) { console.error(`Err ${item.name}: ${err.message}`); }
         }));
         await new Promise(r => setTimeout(r, 200));
     }
 };
 
 // ==========================================
-// 4. EL PORTERO (Con filtro de nombre)
+// 4. EL PORTERO
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
     const insertPromises = elements.map(async (item) => {
@@ -175,10 +334,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         const name = t['name:en'] || t.name || t['name:es']; 
         if (!name) return null;
 
-        // 🔥 FILTRO DE NOMBRE: Si el lugar se llama "Estación Línea D", adiós.
-        if (isTransportContext(name)) {
-            return null;
-        }
+        if (isTransportContext(name)) return null;
 
         if (
             t.railway || t.public_transport || t.highway === 'bus_stop' || 
@@ -215,7 +371,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// ✅ NUEVO ENDPOINT: OBTENER DESCRIPCIÓN (Lazy Loading)
+// ✅ ENDPOINT: OBTENER DESCRIPCIÓN
 // ==========================================
 export const getLocationDescription = async (req, res) => {
     const { id } = req.params;
@@ -227,13 +383,12 @@ export const getLocationDescription = async (req, res) => {
             res.status(404).json({ error: "Lugar no encontrado" });
         }
     } catch (error) {
-        console.error("Error fetching description:", error);
         res.status(500).json({ error: "Error de servidor" });
     }
 };
 
 // ==========================================
-// 5. CONTROLADOR PRINCIPAL: GET LOCALIZACIONES
+// 5. CONTROLADOR PRINCIPAL
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
     req.setTimeout(120000); 
@@ -247,14 +402,14 @@ export const getLocalizaciones = async (req, res) => {
     try {
         let selectValues = [], whereValues = [], orderValues = [];
         
-        // 🔥 CAMBIO: Usamos CASE/SUBSTRING para cortar la descripción en la lista
-        // Esto hace que la carga inicial sea rápida y ligera
         let selectFields = `
             id, 
             name, 
             category, 
             image_url, 
             images, 
+            author, 
+            license,
             CASE 
                 WHEN LENGTH(description) > 180 THEN LEFT(description, 180) || '...' 
                 ELSE description 
@@ -271,7 +426,6 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // --- RADIO SQL ---
         if (lat && lon && !search) {
             baseWhere += ` AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, 80000)`; 
             whereValues.push(parseFloat(lon), parseFloat(lat));
@@ -306,7 +460,7 @@ export const getLocalizaciones = async (req, res) => {
 
         // --- CASO A: BÚSQUEDA POR TEXTO ---
         if (page === 1 && dataToSend.length === 0 && search.length > 3) {
-            console.log(`🔎 [Caso A] Buscando Texto Global: "${search}"`);
+            console.log(`🔎 [Caso A] Buscando: "${search}"`);
             const nominatimInfo = await getNominatimData(search);
             
             if (nominatimInfo && nominatimInfo.type !== 'country') {
@@ -321,8 +475,7 @@ export const getLocalizaciones = async (req, res) => {
                     else bbox = getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, isDenseCity ? 13.5 : 12);
                     
                     const maxResults = 200;
-                    console.log(`🌍 Explorando (Overpass) | Límite: ${maxResults}`);
-
+                    
                     const query = `
                         [out:json][timeout:60];
                         (
@@ -357,7 +510,7 @@ export const getLocalizaciones = async (req, res) => {
             const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
             
             if (dataToSend.length < 10 || nearbyItems.length < 3) {
-                console.log(`📍 [Caso B] Zona GPS vacía. Buscando...`);
+                console.log(`📍 [Caso B] Zona GPS vacía.`);
                 
                 const areaName = await getReverseNominatim(lat, lon);
                 const bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 12);
@@ -395,7 +548,7 @@ export const getLocalizaciones = async (req, res) => {
             }
         }
 
-        // RELLENO DE FOTOS
+        // RELLENO DE FOTOS (Background)
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
              const vipFix = itemsSinFoto.slice(0, 1);
