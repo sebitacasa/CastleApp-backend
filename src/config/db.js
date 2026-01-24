@@ -1,15 +1,12 @@
 import knex from 'knex';
-// 1. Importamos TODAS las configuraciones (development, production, etc.)
-import * as knexConfig from './knexfile.js'; 
+// Importamos la configuración. Al ser CommonJS, a veces se importa como 'default'.
+import knexFile from '../../knexfile.js'; 
 
-// 2. Preguntamos: "¿En qué entorno estamos?"
-// Si Railway nos dice "production", usamos eso. Si no dice nada, asumimos "development".
 const environment = process.env.NODE_ENV || 'development';
 
-// 3. Seleccionamos la configuración correcta del objeto que importamos
-const connectionConfig = knexConfig[environment];
+// Seleccionamos la configuración (development o production)
+const config = knexFile[environment];
 
-// 4. Inicializamos la conexión
-const db = knex(connectionConfig);
+const db = knex(config);
 
 export default db;
