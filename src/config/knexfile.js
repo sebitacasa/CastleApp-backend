@@ -1,6 +1,5 @@
-// Update with your config settings.
-
 import 'dotenv/config'
+
 /**
  * @type { Object.<string, import("knex").Knex.Config> }
  */
@@ -12,35 +11,43 @@ export const development = {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
     port: process.env.DB_PORT,
+  },
+  migrations: {
+    directory: './migrations' // Importante especificar dónde se guardan
   }
 };
+
 export const staging = {
-  client: 'postgresql',
+  client: 'pg',
   connection: {
-    database: 'my_db',
-    user: 'username',
-    password: 'password'
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
   },
   pool: {
     min: 2,
     max: 10
   },
   migrations: {
-    tableName: 'knex_migrations'
+    tableName: 'knex_migrations',
+    directory: './migrations'
   }
 };
+
+// 🚀 ESTA ES LA PARTE IMPORTANTE PARA RAILWAY
 export const production = {
-  client: 'postgresql',
+  client: 'pg',
   connection: {
-    database: 'my_db',
-    user: 'username',
-    password: 'password'
+    // Railway inyecta la URL completa aquí automáticamente:
+    connectionString: process.env.DATABASE_URL,
+    // El SSL es obligatorio en la nube:
+    ssl: { rejectUnauthorized: false }
   },
   pool: {
     min: 2,
     max: 10
   },
   migrations: {
-    tableName: 'knex_migrations'
+    tableName: 'knex_migrations',
+    directory: './migrations'
   }
 };
