@@ -1,6 +1,6 @@
 import knex from 'knex';
 // Importamos la configuración. Al ser CommonJS, a veces se importa como 'default'.
-import knexFile from '../../knexfile.js'; 
+import knexFile from '../../knexfile.cjs'; 
 
 const environment = process.env.NODE_ENV || 'development';
 
