@@ -4,6 +4,7 @@ require('dotenv').config();
  * @type { Object.<string, import("knex").Knex.Config> }
  */
 module.exports = {
+  // 💻 Configuración para tu PC (Local)
   development: {
     client: 'pg',
     connection: {
@@ -17,5 +18,22 @@ module.exports = {
       directory: './migrations',
     },
     useNullAsDefault: true
+  },
+
+  // 🚀 Configuración para Railway (Producción)
+  production: {
+    client: 'pg',
+    connection: {
+      // Railway guarda la dirección completa en esta variable automáticamente:
+      connectionString: process.env.DATABASE_URL, 
+      ssl: { rejectUnauthorized: false } // ⚠️ ESTO ES VITAL: Permite conectar con seguridad
+    },
+    pool: {
+      min: 2,
+      max: 10
+    },
+    migrations: {
+      directory: './migrations'
+    }
   }
 };
