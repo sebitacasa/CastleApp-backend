@@ -33,7 +33,7 @@ module.exports = {
       max: 10
     },
     migrations: {
-      directory: './migrations'
+      directory: '../src/config/migrations'
     }
   }
 };

@@ -48,6 +48,6 @@ export const production = {
   },
   migrations: {
     tableName: 'knex_migrations',
-    directory: './migrations'
+    directory: './migrations '
   }
 };
