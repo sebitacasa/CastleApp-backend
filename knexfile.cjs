@@ -13,7 +13,7 @@ module.exports = {
       port: process.env.DB_PORT,
     },
     migrations: {
-      directory: './migrations'
+      directory: './src/config/migrations'
     }
   },
 
@@ -29,7 +29,7 @@ module.exports = {
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './migrations' // LE QUITÉ EL ESPACIO QUE TENÍAS AL FINAL
+      directory: './src/config/migrations' // LE QUITÉ EL ESPACIO QUE TENÍAS AL FINAL
     }
   }
 
