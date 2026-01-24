@@ -31,11 +31,12 @@ app.use('/social', socialRoutes);
 
 app.use('/auth', authRoutes);
 
-app.listen(port, () => {
-    console.log(`🏰 Server running in ENGLISH at http://localhost:${port}`);
-});
+// app.listen(port, () => {
+//     console.log(`🏰 Server running in ENGLISH at http://localhost:${port}`);
+// });
 // 2. ENDPOINT: BÚSQUEDA GEOESPACIAL (Cercanía)
 
-app.listen(port, () => {
-    console.log(`🏰 Servidor LISTO en http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+    console.log(`🚀 Server running on port ${port}`);
 });
+
