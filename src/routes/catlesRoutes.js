@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getLocalizaciones, getProxyImage, getLocationDescription } from '../controller/europeanaController.js'; // Importamos el controlador
-
+import db from '../config/db.js';
 const router = Router();
 
 // Vinculamos la URL con la función del controlador
