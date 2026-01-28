@@ -82,7 +82,7 @@ async function getWikipediaData(lat, lon, targetName) {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '200', ggslimit: '1', // Radio reducido para precisión
+            ggscoord: `${lat}|${lon}`, ggsradius: '200', ggslimit: '1', 
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
@@ -164,14 +164,12 @@ async function getMapillaryImage(lat, lon) {
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
-    // Procesamos de a pocos para no ahogar el servidor en background
     const BATCH_SIZE = 3; 
     
     for (let i = 0; i < elements.length; i += BATCH_SIZE) {
         const batch = elements.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (item) => {
             try {
-                // Solo procesar si NO tiene foto o NO tiene autor (data incompleta)
                 const hasImages = item.images && item.images.length > 0 && item.images[0] !== null;
                 const missingAuthor = !item.author;
 
@@ -199,7 +197,7 @@ const processImagesInBatches = async (elements) => {
                              bestCandidate.description = wikiData.description;
                         }
 
-                        // 2. Commons (Solo si falta imagen)
+                        // 2. Commons
                         if (bestCandidate.images.length === 0) {
                             const gallery = await getCommonsImages(name);
                             if (gallery.length > 0) {
@@ -214,7 +212,7 @@ const processImagesInBatches = async (elements) => {
                             }
                         }
 
-                        // 3. Mapillary (Ultimo recurso)
+                        // 3. Mapillary
                         if (bestCandidate.images.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
                             if (streetPhoto) {
@@ -223,7 +221,6 @@ const processImagesInBatches = async (elements) => {
                             }
                         }
 
-                        // Guardar en BD si encontramos algo nuevo
                         if (bestCandidate.imageUrl || bestCandidate.description || bestCandidate.author) {
                             const uniqueImages = [...new Set(bestCandidate.images)];
                             const postgresArray = uniqueImages.length > 0 
@@ -241,30 +238,28 @@ const processImagesInBatches = async (elements) => {
                 }
             } catch (err) { console.error(`Err Background ${item.name}: ${err.message}`); }
         }));
-        // Pequeña pausa entre lotes para no saturar CPU
         await new Promise(r => setTimeout(r, 500));
     }
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (FILTRO ESTRICTO 8 CATEGORÍAS)
+// 🛡️ EL PORTERO (FILTRO ESTRICTO: SIN MONUMENTS, CON STATUES)
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // Definimos las categorías VIP
+    // 1. LISTA VIP: Agregamos 'Statues', quitamos 'Monuments'
     const ALLOWED_CATEGORIES = new Set([
-        'Castles', 'Ruins', 'Museums', 'Monuments', 
-        'Plaques', 'Busts', 'Stolperstein', 'Historic Site'
+        'Castles', 'Ruins', 'Museums', 
+        'Plaques', 'Busts', 'Stolperstein', 'Historic Site',
+        'Statues' 
     ]);
 
     const insertPromises = elements.map(async (item) => {
         const t = item.tags || {};
         const name = t['name:en'] || t.name || t['name:es']; 
         
-        // Excepción: Stolperstein a veces no tiene nombre, pero es válido
         if (!name && t['memorial:type'] !== 'stolperstein') return null;
         if (isTransportContext(name)) return null;
 
-        // Filtros de transporte y servicios
         if (t.railway || t.public_transport || t.highway === 'bus_stop' || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
             t.amenity === 'ferry_terminal' || t.amenity === 'bicycle_rental') return null;
@@ -272,31 +267,35 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         const iLat = item.lat || item.center?.lat;
         const iLon = item.lon || item.center?.lon;
         
-        // --- 🧠 LÓGICA DE CATEGORIZACIÓN ---
+        // --- 🧠 LÓGICA DE CATEGORIZACIÓN MEJORADA ---
         let cat = 'Others';
 
         if (t.historic === 'ruins') cat = 'Ruins';
         else if (t.tourism === 'museum') cat = 'Museums';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         
-        // Memoriales detallados
+        // Lógica fina para Memoriales y Estatuas
         else if (t.historic === 'memorial' || t.historic === 'monument') {
             const memType = t['memorial:type'];
+            
             if (memType === 'stolperstein') cat = 'Stolperstein';
             else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
             else if (memType === 'bust') cat = 'Busts';
-            else cat = 'Monuments'; 
+            else if (memType === 'statue') cat = 'Statues'; // 👈 Se queda
+            else cat = 'Monuments'; // 👈 Se asigna, pero se filtra abajo
         }
         else if (t.tourism === 'artwork') {
              const artType = t['artwork_type'];
+             
              if (artType === 'bust') cat = 'Busts';
-             else cat = 'Monuments';
+             else if (artType === 'statue') cat = 'Statues'; // 👈 Se queda
+             else cat = 'Monuments'; // Arte abstracto u otros se filtran
         }
         else if (t.historic === 'building' || t.historic === 'archaeological_site' || t.historic === 'battlefield') {
             cat = 'Historic Site';
         }
 
-        // 🚨 FILTRO FINAL: Si no es VIP, se descarta
+        // 🚨 FILTRO FINAL: Si es 'Monuments' (u otro no listado), SE DESCARTA
         if (!ALLOWED_CATEGORIES.has(cat)) return null;
 
         let finalAddress = locationLabel;
@@ -320,7 +319,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 // 🕹️ CONTROLADOR PRINCIPAL OPTIMIZADO
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
-    req.setTimeout(60000); // 1 minuto máximo global
+    req.setTimeout(60000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
@@ -344,9 +343,9 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // 🔒 FILTRO DE BASE DE DATOS (Para no traer basura vieja)
+        // 🔒 FILTRO SQL: Traer Statues, Ignorar Monuments viejos
         if (!category || category === 'All') {
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Monuments', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site')`;
+            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues')`;
         } else {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
@@ -384,10 +383,8 @@ export const getLocalizaciones = async (req, res) => {
         let bbox = null;
         let areaName = "Explored Area";
 
-        // Detectar si necesitamos ir a Overpass (Search vacía o GPS vacío)
         if (page === 1) {
             if (search.length > 3 && dataToSend.length === 0) {
-                 // CASO A: Texto
                  const nominatimInfo = await getNominatimData(search);
                  if (nominatimInfo && nominatimInfo.type !== 'country') {
                      const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
@@ -400,7 +397,6 @@ export const getLocalizaciones = async (req, res) => {
                      }
                  }
             } else if (lat && lon && !search) {
-                // CASO B: GPS
                 const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
                 if (dataToSend.length < 5 || nearbyItems.length < 2) {
                     areaName = await getReverseNominatim(lat, lon);
@@ -413,16 +409,21 @@ export const getLocalizaciones = async (req, res) => {
         if (explorationNeeded && bbox) {
             console.log(`🌍 Explorando Overpass para: ${areaName}`);
             
-            // 🚀 QUERY OPTIMIZADA (Solo las 8 categorías)
+            // 🚀 QUERY OVERPASS REFINADA: Solo Statues explícitas, adiós Monuments genéricos
             const overpassQuery = `
                 [out:json][timeout:25];
                 (
                     nwr["historic"~"castle|fortress|citywalls|manor|palace|fort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["historic"="ruins"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"~"monument|memorial|plaque"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["memorial:type"~"stolperstein|plaque|bust"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="artwork"]["artwork_type"="bust"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    
+                    // Memoriales específicos
+                    nwr["memorial:type"~"stolperstein|plaque|bust|statue"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"="plaque"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+
+                    // Arte Específico (Estatuas y Bustos solamente)
+                    nwr["tourism"="artwork"]["artwork_type"~"bust|statue"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    
                     nwr["historic"~"archaeological_site|battlefield|building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
@@ -432,18 +433,15 @@ export const getLocalizaciones = async (req, res) => {
             const elements = await fetchOverpassData(overpassQuery, 100000);
             if (elements.length > 0) {
                 await insertElementsToDB(elements, areaName);
-                // Refrescamos datos de la DB
                 const finalResult = await db.raw(finalQuery, allValues);
                 dataToSend = finalResult.rows;
             }
         }
 
-        // 🚀 FIRE AND FORGET: ENVIAR RESPUESTA YA MISMO
         console.log(`⚡ Enviando ${dataToSend.length} resultados al usuario.`);
         res.json({ page, limit, data: dataToSend });
 
-        // --- TRABAJO EN BACKGROUND (POST-RESPUESTA) ---
-        // Buscamos fotos para los items que no tienen, SIN HACER ESPERAR AL USUARIO
+        // --- BACKGROUND PHOTOS ---
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
             console.log(`📸 [Background] Buscando fotos para ${itemsSinFoto.length} lugares...`);
@@ -458,7 +456,6 @@ export const getLocalizaciones = async (req, res) => {
     }
 };
 
-// Endpoints simples
 export const getLocationDescription = async (req, res) => {
     const { id } = req.params;
     try {
