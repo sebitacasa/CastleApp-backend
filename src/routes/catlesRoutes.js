@@ -15,8 +15,9 @@ router.get('/localizaciones/:id/description', getLocationDescription);
 
 router.get('/nuke-db', async (req, res) => {
     try {
-        await db.raw('TRUNCATE TABLE historical_locations');
-        res.send('✅ LISTO: Base de datos purgada.');
+        // 🔥 AGREGAMOS "CASCADE" PARA BORRAR TAMBIÉN FAVORITOS VINCULADOS
+        await db.raw('TRUNCATE TABLE historical_locations CASCADE');
+        res.send('✅ LISTO: Base de datos purgada (y referencias limpiadas). Reinicia la app.');
     } catch (e) {
         res.status(500).send('Error: ' + e.message);
     }
