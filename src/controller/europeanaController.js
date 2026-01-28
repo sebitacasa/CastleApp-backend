@@ -37,7 +37,8 @@ const isInvalidContext = (text, categories = '') => {
         'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house of', 'tomb', 
         'grave', 'memorial', 'bridge', 'theater', 'cinema', 'construction', 'tower',
         'palace', 'fortress', 'mansion', 'site', 'venue', 'opened', 'founded', 'built',
-        'archaeological', 'temple', 'shrine', 'stolperstein', 'commemorative'
+        'archaeological', 'temple', 'shrine', 'stolperstein', 'commemorative', 
+        'chapel', 'monastery', 'abbey', 'basilica'
     ];
     const personKeywords = [
         'was a', 'is a', 'born in', 'died in', 'born on', 'died on', 
@@ -243,59 +244,87 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (FILTRO ESTRICTO: SIN MONUMENTS, CON STATUES)
+// 🛡️ EL PORTERO (LÓGICA EXPANDIDA: RELIGIÓN, TORRES Y TURISMO)
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // 1. LISTA VIP: Agregamos 'Statues', quitamos 'Monuments'
+    // 1. LISTA VIP AMPLIADA
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Plaques', 'Busts', 'Stolperstein', 'Historic Site',
-        'Statues' 
+        'Statues', // Estatuas
+        'Religious', // ✨ Iglesias, Catedrales, Abadías
+        'Towers',    // ✨ Torres medievales, Murallas
+        'Tourist'    // ✨ Miradores, Atracciones
     ]);
 
     const insertPromises = elements.map(async (item) => {
         const t = item.tags || {};
-        const name = t['name:en'] || t.name || t['name:es']; 
+        const name = t['name:en'] || t.name || t['name:es']; // Prioridad Inglés
         
+        // Excepción: Stolperstein a veces no tiene nombre pero es válido
         if (!name && t['memorial:type'] !== 'stolperstein') return null;
         if (isTransportContext(name)) return null;
 
+        // Filtros de transporte y servicios basura
         if (t.railway || t.public_transport || t.highway === 'bus_stop' || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
+            t.amenity === 'parking' || t.amenity === 'atm' || // 👈 Filtros extra
             t.amenity === 'ferry_terminal' || t.amenity === 'bicycle_rental') return null;
 
         const iLat = item.lat || item.center?.lat;
         const iLon = item.lon || item.center?.lon;
         
-        // --- 🧠 LÓGICA DE CATEGORIZACIÓN MEJORADA ---
+        // --- 🧠 LÓGICA DE CATEGORIZACIÓN EXPANDIDA ---
         let cat = 'Others';
 
+        // 🏰 CASTILLOS Y RUINAS
         if (t.historic === 'ruins') cat = 'Ruins';
-        else if (t.tourism === 'museum') cat = 'Museums';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         
-        // Lógica fina para Memoriales y Estatuas
+        // 🏛️ MUSEOS
+        else if (t.tourism === 'museum') cat = 'Museums';
+
+        // ⛪ RELIGIOSO (Muy importante en Europa)
+        else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery') {
+            cat = 'Religious';
+        }
+
+        // 🗼 TORRES Y ESTRUCTURAS
+        else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) {
+            cat = 'Towers';
+        }
+
+        // 🗽 MEMORIALES Y ESTATUAS (Filtro Fino)
         else if (t.historic === 'memorial' || t.historic === 'monument') {
             const memType = t['memorial:type'];
-            
             if (memType === 'stolperstein') cat = 'Stolperstein';
             else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
             else if (memType === 'bust') cat = 'Busts';
-            else if (memType === 'statue') cat = 'Statues'; // 👈 Se queda
-            else cat = 'Monuments'; // 👈 Se asigna, pero se filtra abajo
+            else if (memType === 'statue') cat = 'Statues'; 
+            else if (t.historic === 'wayside_shrine' || t.historic === 'wayside_cross') cat = 'Religious'; 
+            else cat = 'Monuments'; // Se filtrará si no está en ALLOWED_CATEGORIES (y no lo está)
         }
+
+        // 🎨 ARTE
         else if (t.tourism === 'artwork') {
              const artType = t['artwork_type'];
-             
              if (artType === 'bust') cat = 'Busts';
-             else if (artType === 'statue') cat = 'Statues'; // 👈 Se queda
-             else cat = 'Monuments'; // Arte abstracto u otros se filtran
+             else if (artType === 'statue') cat = 'Statues';
+             else if (['architecture', 'mosaic', 'sculpture'].includes(artType)) cat = 'Statues'; // Flexible
+             else cat = 'Monuments'; 
         }
-        else if (t.historic === 'building' || t.historic === 'archaeological_site' || t.historic === 'battlefield') {
+
+        // 📷 TURISMO GENERAL
+        else if (t.tourism === 'viewpoint' || t.tourism === 'attraction') {
+            cat = 'Tourist';
+        }
+
+        // 🏚️ SITIOS HISTÓRICOS GENÉRICOS
+        else if (['building', 'archaeological_site', 'battlefield'].includes(t.historic)) {
             cat = 'Historic Site';
         }
 
-        // 🚨 FILTRO FINAL: Si es 'Monuments' (u otro no listado), SE DESCARTA
+        // 🚨 FILTRO FINAL: Solo pasa lo que definimos arriba
         if (!ALLOWED_CATEGORIES.has(cat)) return null;
 
         let finalAddress = locationLabel;
@@ -343,9 +372,9 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // 🔒 FILTRO SQL: Traer Statues, Ignorar Monuments viejos
+        // 🔒 FILTRO SQL EXPANDIDO
         if (!category || category === 'All') {
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues')`;
+            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues', 'Religious', 'Towers', 'Tourist')`;
         } else {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
@@ -407,27 +436,38 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         if (explorationNeeded && bbox) {
-            console.log(`🌍 Explorando Overpass para: ${areaName}`);
+            console.log(`🌍 Explorando Overpass (Deep Scan) para: ${areaName}`);
             
-            // 🚀 QUERY OVERPASS REFINADA: Solo Statues explícitas, adiós Monuments genéricos
+            // 🚀 QUERY OVERPASS EXPANDIDA (Trae todo lo interesante, filtra basura)
             const overpassQuery = `
-                [out:json][timeout:25];
+                [out:json][timeout:35];
                 (
+                    // 1. Clasicos
                     nwr["historic"~"castle|fortress|citywalls|manor|palace|fort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["historic"="ruins"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     
-                    // Memoriales específicos
+                    // 2. Religioso (Iglesias, Catedrales)
+                    nwr["amenity"~"place_of_worship|monastery"]["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["building"~"cathedral|chapel|church"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"~"wayside_shrine|wayside_cross"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+
+                    // 3. Estructuras (Torres, Puertas)
+                    nwr["historic"~"tower|city_gate|bridge|aqueduct|fountain"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+
+                    // 4. Memoriales y Arte (Solo específicos)
                     nwr["memorial:type"~"stolperstein|plaque|bust|statue"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["historic"="plaque"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-
-                    // Arte Específico (Estatuas y Bustos solamente)
-                    nwr["tourism"="artwork"]["artwork_type"~"bust|statue"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["tourism"="artwork"]["artwork_type"~"bust|statue|sculpture|architecture"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     
+                    // 5. Turismo
+                    nwr["tourism"="viewpoint"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+
+                    // 6. Sitios
                     nwr["historic"~"archaeological_site|battlefield|building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
-                out center 120;
+                out center 150;
             `;
 
             const elements = await fetchOverpassData(overpassQuery, 100000);
