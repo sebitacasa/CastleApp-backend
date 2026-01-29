@@ -1,4 +1,5 @@
 import axios from 'axios';
+import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'TU_API_KEY_AQUI'; 
 
@@ -165,37 +166,17 @@ export const getGoogleLocations = async (req, res) => {
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
-
-    if (!title) return res.status(400).json({ error: 'Faltan parámetros' });
+    if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
 
     try {
-        const baseUrl = 'https://en.wikipedia.org/w/api.php';
-        const params = new URLSearchParams({
-            action: 'query',
-            format: 'json',
-            prop: 'extracts',
-            titles: title,
-            explaintext: '1',
-            origin: '*' // 👈 Agregamos esto para evitar problemas de CORS
-        });
-
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, {
-            headers: { 'User-Agent': 'CastleApp/1.0 (https://tu-web-o-email.com)' }, // 👈 User-Agent real
-            timeout: 5000 
-        });
-
-        const pages = response.data?.query?.pages;
-        if (!pages || pages["-1"]) { // 👈 "-1" significa que Wikipedia no encontró el título
-            return res.status(404).json({ error: 'Artículo no encontrado en Wikipedia' });
-        }
-
+        const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+        const response = await axios.get(url, { headers: { 'User-Agent': 'CastleApp/1.0' } });
+        
+        const pages = response.data.query.pages;
         const pageId = Object.keys(pages)[0];
-        const fullText = pages[pageId].extract;
-
-        res.json({ full_description: fullText });
-
+        
+        res.json({ full_description: pages[pageId].extract || "No details found." });
     } catch (error) {
-        console.error("🔥 Error detallado:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Error al conectar con Wikipedia' });
+        res.status(500).json({ error: error.message });
     }
 };
