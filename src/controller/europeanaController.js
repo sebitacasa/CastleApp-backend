@@ -22,48 +22,54 @@ const areNamesSimilar = (name1, name2) => {
     const n1 = name1.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const n2 = name2.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     if (n1.includes(n2) || n2.includes(n1)) return true;
+    
     const words1 = n1.split(' ').filter(w => w.length >= 4);
     const words2 = n2.split(' ');
-    const targetWords = words1.length > 0 ? words1 : n1.split(' ');
-    return targetWords.some(w => words2.includes(w));
+    const matches = words1.filter(w => words2.includes(w));
+    return matches.length >= 1; 
+};
+
+const isInvalidImage = (url) => {
+    if (!url) return true;
+    const lower = url.toLowerCase();
+    const badKeywords = [
+        'svg', 'logo', 'icon', 'map', 'diagram', 'chart', 'plan', 
+        'textile', 'clothing', 'shirt', 'fabric', 'underwear', 'garment', // 👈 ANTI-ROPA
+        'food', 'dish', 'plate', 'menu', 
+        'interior', 'room', 'furniture', 'chair', 'table'
+    ];
+    return badKeywords.some(k => lower.includes(k));
 };
 
 const isInvalidContext = (text, categories = '') => {
     if (!text && !categories) return false;
     const lowerText = (text + ' ' + categories).toLowerCase();
 
-    // Palabras clave que indican que ES un lugar válido
+    // Palabras que confirman que ES un lugar válido
     const placeKeywords = [
         'located', 'situated', 'building', 'monument', 'statue', 'museum', 'castle', 
-        'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house of', 'tomb', 
-        'grave', 'memorial', 'bridge', 'theater', 'cinema', 'construction', 'tower',
-        'palace', 'fortress', 'mansion', 'site', 'venue', 'opened', 'founded', 'built',
-        'archaeological', 'temple', 'shrine', 'stolperstein', 'commemorative', 
-        'chapel', 'monastery', 'abbey', 'basilica', 'landmark', 'history', 'tourist'
+        'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house', 'tomb', 
+        'grave', 'memorial', 'bridge', 'theater', 'tower', 'palace', 'fortress', 
+        'mansion', 'site', 'opened', 'founded', 'built', 'archaeological', 'temple', 
+        'shrine', 'stolperstein', 'chapel', 'monastery', 'abbey', 'basilica', 
+        'landmark', 'history', 'tourist', 'viewpoint', 'attraction'
     ];
-    // Palabras clave de personas (si solo habla de una persona y no del lugar, es sospechoso)
-    const personKeywords = [
-        'was a', 'is a', 'born in', 'died in', 'born on', 'died on', 
-        'singer', 'actor', 'musician', 'politician', 'player', 'footballer', 
-        'writer', 'painter', 'poet', 'priest', 'soldier', 'general', 'king', 
-        'queen', 'prince', 'princess', 'composer', 'artist', 'athlete',
-        'chanteur', 'sänger', 'biography', 'people', 'living people', 'portrait'
-    ];
+    
     // Basura absoluta
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
-        'interior of', 'furniture', 'poster', 'advertisement', 'text', 'logo', 'icon',
+        'interior of', 'furniture', 'poster', 'advertisement', 'logo', 'icon',
         'flag', 'coat of arms', 'signature', 'document', 'pdf', 'book cover',
-        'underwear', 'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
-        'insect', 'animal', 'plant', 'flower', 'fungi'
+        'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
+        'insect', 'animal', 'plant', 'flower', 'fungi', 'textile', 'fabric'
     ];
 
     const hasPlace = placeKeywords.some(w => lowerText.includes(w));
-    const hasPerson = personKeywords.some(w => lowerText.includes(w));
     const hasTrash = trashKeywords.some(w => lowerText.includes(w));
 
     if (hasTrash) return true;
-    if (hasPerson && !hasPlace) return true;
+    if (!hasPlace && lowerText.length < 50) return true; 
+    
     return false;
 };
 
@@ -74,7 +80,7 @@ const isTransportContext = (text) => {
         lower.includes('estacion linea') || lower.includes('estación línea') ||
         lower.includes('station on line') || lower.includes('metro station') ||
         lower.includes('subway station') || lower.includes('train station') ||
-        lower.includes('railway station')
+        lower.includes('railway station') || lower.includes('bus stop')
     );
 };
 
@@ -86,9 +92,7 @@ const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
     const R = 6371; 
     const dLat = (lat2 - lat1) * (Math.PI / 180);
     const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a = 
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c; 
 };
@@ -101,7 +105,7 @@ async function getWikipediaData(lat, lon, targetName) {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '250', ggslimit: '1',
+            ggscoord: `${lat}|${lon}`, ggsradius: '150', ggslimit: '1', 
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
@@ -117,7 +121,10 @@ async function getWikipediaData(lat, lon, targetName) {
         }
         if (isInvalidContext(description)) return null;
 
-        return { hasData: true, title: pageData.title, description: description, imageUrl: pageData.thumbnail?.source || null };
+        let img = pageData.thumbnail?.source || null;
+        if (isInvalidImage(img)) img = null;
+
+        return { hasData: true, title: pageData.title, description: description, imageUrl: img };
     } catch (e) { return null; }
 }
 
@@ -141,9 +148,12 @@ async function getWikipediaDataByName(name) {
         if (isInvalidContext(description)) return null;
         const coords = pageData.coordinates ? pageData.coordinates[0] : null;
 
+        let img = pageData.thumbnail?.source || null;
+        if (isInvalidImage(img)) img = null;
+
         return { 
             hasData: true, title: pageData.title, description: description, 
-            imageUrl: pageData.thumbnail?.source || null,
+            imageUrl: img,
             wikiLat: coords ? coords.lat : null, wikiLon: coords ? coords.lon : null
         };
     } catch (e) { return null; }
@@ -154,7 +164,8 @@ async function getCommonsImages(locationName) {
         const baseUrl = 'https://commons.wikimedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
-            gsrsearch: locationName, gsrnamespace: '6', gsrlimit: '3',
+            gsrsearch: `${locationName} view`, 
+            gsrnamespace: '6', gsrlimit: '5',
             prop: 'imageinfo', iiprop: 'url|extmetadata', iiurlwidth: '800', origin: '*'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
@@ -166,9 +177,11 @@ async function getCommonsImages(locationName) {
             const meta = info?.extmetadata || {};
             const finalUrl = info?.thumburl || info?.url;
             if (!finalUrl) return null;
-            const lowerUrl = finalUrl.toLowerCase();
+            if (isInvalidImage(finalUrl)) return null; 
+
             const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-            if (!validExtensions.some(ext => lowerUrl.includes(ext))) return null;
+            if (!validExtensions.some(ext => finalUrl.toLowerCase().includes(ext))) return null;
+
             return { url: finalUrl, author: cleanWikiText(meta.Artist?.value), license: meta.LicenseShortName?.value };
         }).filter(item => item !== null); 
         return validImages.slice(0, 3);
@@ -178,7 +191,7 @@ async function getCommonsImages(locationName) {
 async function getMapillaryImage(lat, lon) {
     try {
         const MAPILLARY_TOKEN = 'MLY|25296378576723082|c74a374cec37733c10c8879dd9878e67'; 
-        const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}&fields=id,thumb_1024_url&is_pano=false&closeto=${lon},${lat}&radius=50&limit=1`;
+        const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}&fields=id,thumb_1024_url&is_pano=false&closeto=${lon},${lat}&radius=40&limit=1`;
         const res = await axios.get(url, { timeout: 2000 });
         return res.data.data?.[0]?.thumb_1024_url || null;
     } catch (e) { return null; }
@@ -206,11 +219,11 @@ const processImagesInBatches = async (elements) => {
                     if (name) {
                         let bestCandidate = { imageUrl: null, images: [], description: null, author: null, license: null };
 
-                        // 1. Wikipedia (Intento Geográfico)
+                        // 1. Wikipedia Geográfico
                         let wikiData = null;
                         if (lat && lon) wikiData = await getWikipediaData(lat, lon, name);
                         
-                        // 2. Wikipedia (Intento por Nombre con FILTRO DE DISTANCIA)
+                        // 2. Wikipedia Nombre
                         if (!wikiData?.hasData || !wikiData?.imageUrl) {
                             const cleanName = name.replace(/The |El |La /g, ''); 
                             const searchQuery = item.country ? `${cleanName} ${item.country}` : cleanName;
@@ -219,9 +232,9 @@ const processImagesInBatches = async (elements) => {
                             if (textResult) {
                                 if (textResult.wikiLat && textResult.wikiLon && lat && lon) {
                                     const dist = getDistanceFromLatLonInKm(lat, lon, textResult.wikiLat, textResult.wikiLon);
-                                    if (dist < 100) wikiData = textResult; 
+                                    if (dist < 50) wikiData = textResult; 
                                     else console.log(`⚠️ Descartado por distancia (${dist.toFixed(0)}km): ${name}`);
-                                } else {
+                                } else if (!lat || !lon) {
                                     wikiData = textResult;
                                 }
                             }
@@ -274,14 +287,15 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (VERSIÓN QUIRÚRGICA) 🏥
+// 🛡️ EL PORTERO (SIN TOURIST, SOLO HISTORIA) ✅
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // 🚫 SACAMOS "Monuments" Y "Landmark" PARA EVITAR BASURA
+    // 🚫 TOURIST ELIMINADO de la lista permitida
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Plaques', 'Busts', 'Stolperstein', 'Historic Site',
-        'Statues', 'Religious', 'Towers', 'Tourist'
+        'Statues', 'Religious', 'Towers', 
+        'Others' 
     ]);
 
     const insertPromises = elements.map(async (item) => {
@@ -292,17 +306,18 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         if (isTransportContext(name)) return null;
 
         // FILTROS DE BASURA
-        if (t.railway || t.public_transport || t.highway === 'bus_stop' || 
+        if (t.railway || t.public_transport || t.highway || t.shop || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
             t.amenity === 'parking' || t.amenity === 'atm' || 
             t.amenity === 'toilets' || t.amenity === 'post_box' || 
             t.amenity === 'telephone' || t.amenity === 'bench' || 
-            t.amenity === 'waste_basket') return null;
+            t.amenity === 'waste_basket' || t.leisure === 'playground' ||
+            t.amenity === 'restaurant' || t.amenity === 'cafe' || t.amenity === 'bar') return null;
 
         const iLat = item.lat || item.center?.lat;
         const iLon = item.lon || item.center?.lon;
         
-        let cat = 'Others';
+        let cat = 'Others'; 
 
         // 1. CLASIFICACIÓN
         if (t.historic === 'ruins') cat = 'Ruins';
@@ -311,36 +326,32 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery') cat = 'Religious';
         else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) cat = 'Towers';
         
-        // 2. ARTE Y MEMORIALES (Aquí filtramos la basura de monumentos)
-        else if (t.historic === 'memorial' || t.historic === 'monument' || t.tourism === 'artwork') {
+        // 2. ARTE Y MEMORIALES
+        else if (t.historic === 'memorial' || t.tourism === 'artwork') {
             const memType = t['memorial:type'];
-            const artType = t['artwork_type'];
-            
             if (memType === 'stolperstein') cat = 'Stolperstein';
             else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
-            else if (memType === 'bust' || artType === 'bust') cat = 'Busts';
-            else if (memType === 'statue' || artType === 'statue') cat = 'Statues'; 
-            else if (t.historic === 'wayside_shrine' || t.historic === 'wayside_cross') cat = 'Religious'; 
-            
-            // 🛑 AQUÍ ESTÁ EL CAMBIO:
-            // Si es un monumento genérico SIN tipo específico (ni estatua, ni placa, etc.),
-            // lo descartamos devolviendo NULL.
-            else return null; 
+            else if (memType === 'bust') cat = 'Busts';
+            else if (memType === 'statue') cat = 'Statues'; 
+            else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
+            else cat = 'Historic Site'; 
         }
         
-        // 3. TURISMO Y SITIOS
-        else if (t.tourism === 'viewpoint' || t.tourism === 'attraction' || t.tourism === 'theme_park' || t.tourism === 'zoo') {
-            cat = 'Tourist';
-        }
-        else if (['building', 'archaeological_site', 'battlefield'].includes(t.historic)) {
-            cat = 'Historic Site';
+        // 3. TODO LO DEMÁS HISTÓRICO
+        else if (t.historic) {
+            cat = 'Historic Site'; // Esto captura "Historic Buildings" de Salzburgo
         }
 
-        // SI NO ESTÁ EN LA LISTA PERMITIDA, ADIÓS
+        // 🚫 AQUÍ SE FILTRA LA BASURA TURÍSTICA
+        // Si era 'viewpoint', 'attraction', 'theme_park' y no tenía tag 'historic',
+        // caerá en 'Others' o no tendrá categoría. 
+        // Si cae en 'Others', pasa, PERO como no vamos a buscar 'tourism' genérico en Overpass, 
+        // la mayoría de basura ni siquiera llegará aquí.
+
         if (!ALLOWED_CATEGORIES.has(cat)) return null;
 
         let finalAddress = locationLabel;
-        const city = t['addr:city'] || t['addr:town'] || t['addr:village'];
+        const city = t['addr:city'] || t['addr:town'];
         const street = t['addr:street'];
         if (city) finalAddress = street ? `${street}, ${city}` : city;
         const safeAddress = finalAddress.length > 90 ? finalAddress.substring(0, 90) + '...' : finalAddress;
@@ -384,9 +395,9 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         
-        // 🔒 FILTRO SQL (Sin Monuments)
+        // 🔥 QUITAMOS 'Tourist' DE AQUÍ TAMBIÉN
         if (!category || category === 'All') {
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues', 'Religious', 'Towers', 'Tourist')`;
+            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues', 'Religious', 'Towers', 'Others')`;
         } else {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
@@ -425,23 +436,21 @@ export const getLocalizaciones = async (req, res) => {
         let areaName = "Explored Area";
 
         if (page === 1) {
-            if (search.length > 3 && dataToSend.length === 0) {
+            if (search.length > 3 && dataToSend.length < 15) { 
                  const nominatimInfo = await getNominatimData(search);
                  if (nominatimInfo && nominatimInfo.type !== 'country') {
                      const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
                      if (isArea) {
-                         const displayNameLower = nominatimInfo.displayName.toLowerCase();
-                         const isDenseCity = DENSE_CITIES.some(city => displayNameLower.includes(city));
-                         bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, isDenseCity ? 13.5 : 12);
+                         bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 12); 
                          areaName = nominatimInfo.displayName;
                          explorationNeeded = true;
                      }
                  }
             } else if (lat && lon && !search) {
                 const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
-                if (dataToSend.length < 5 || nearbyItems.length < 2) {
+                if (dataToSend.length < 10 || nearbyItems.length < 5) {
                     areaName = await getReverseNominatim(lat, lon);
-                    bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 12.5);
+                    bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 13);
                     explorationNeeded = true;
                 }
             }
@@ -449,28 +458,20 @@ export const getLocalizaciones = async (req, res) => {
 
         if (explorationNeeded && bbox) {
             console.log(`🌍 Explorando Overpass (Deep Scan) para: ${areaName}`);
+            // 🔥 QUERY LIMPIA: Solo Historia + Museos + Arte. 
+            // Eliminamos "tourism" genérico para borrar parques de atracciones, zoos y miradores.
             const overpassQuery = `
-                [out:json][timeout:35];
+                [out:json][timeout:45];
                 (
-                    nwr["historic"~"castle|fortress|citywalls|manor|palace|fort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"="ruins"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["amenity"~"place_of_worship|monastery"]["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["building"~"cathedral|chapel|church"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"~"wayside_shrine|wayside_cross"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"~"tower|city_gate|bridge|aqueduct|fountain"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"~"monument|memorial"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["memorial:type"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"="plaque"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="artwork"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"~"viewpoint|attraction|theme_park|zoo"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["historic"~"archaeological_site|battlefield|building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
-                out center 150;
+                out center;
             `;
 
-            const elements = await fetchOverpassData(overpassQuery, 100000);
+            const elements = await fetchOverpassData(overpassQuery, 200000); 
             if (elements.length > 0) {
                 await insertElementsToDB(elements, areaName);
                 const finalResult = await db.raw(finalQuery, allValues);
@@ -483,10 +484,7 @@ export const getLocalizaciones = async (req, res) => {
 
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
-            console.log(`📸 [Background] Buscando fotos para ${itemsSinFoto.length} lugares...`);
-            processImagesInBatches(itemsSinFoto)
-                .then(() => console.log("✅ [Background] Fotos actualizadas."))
-                .catch(err => console.error("⚠️ [Background] Error:", err.message));
+            processImagesInBatches(itemsSinFoto).catch(err => console.error(err));
         }
 
     } catch (error) {
@@ -510,7 +508,6 @@ export const getProxyImage = async (req, res) => {
         if (!url) return res.status(400).send('Falta URL');
         const response = await axios({ url: decodeURIComponent(url), method: 'GET', responseType: 'stream', headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
         res.set('Content-Type', response.headers['content-type']);
-        res.set('Cache-Control', 'public, max-age=86400');
         response.data.pipe(res);
     } catch (error) { if (!res.headersSent) res.status(404).end(); }
 };
