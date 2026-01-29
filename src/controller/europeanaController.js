@@ -10,330 +10,388 @@ import {
 } from '../services/externalApis.js'; 
 
 // ==========================================
-// 🧹 HELPERS DE LIMPIEZA
+// 🧹 HELPER: LIMPIAR HTML
 // ==========================================
 const cleanWikiText = (html) => {
     if (!html) return null;
     return html.replace(/<[^>]*>?/gm, '').trim();
 };
 
+// ==========================================
+// 🧠 HELPER: COMPARADOR DE NOMBRES
+// ==========================================
 const areNamesSimilar = (name1, name2) => {
     if (!name1 || !name2) return false;
     const n1 = name1.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const n2 = name2.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    
     if (n1.includes(n2) || n2.includes(n1)) return true;
+    
     const words1 = n1.split(' ').filter(w => w.length >= 4);
     const words2 = n2.split(' ');
-    const matches = words1.filter(w => words2.includes(w));
-    return matches.length >= 1; 
+    const targetWords = words1.length > 0 ? words1 : n1.split(' ');
+    
+    return targetWords.some(w => words2.includes(w));
 };
 
-// 🔥 MANTENEMOS EL FILTRO DE FOTOS MALAS (Esto funciona bien)
-const isInvalidImage = (url, title = '') => {
-    if (!url) return true;
-    const lowerUrl = url.toLowerCase();
-    const lowerTitle = title.toLowerCase();
-    const badKeywords = [
-        'svg', 'logo', 'icon', 'map', 'diagram', 'chart', 'plan', 'drawing', 'sketch',
-        'textile', 'clothing', 'shirt', 'fabric', 'underwear', 'garment', 'hat',
-        'food', 'dish', 'plate', 'menu', 'bottle',
-        'interior', 'room', 'furniture', 'chair', 'table', 'shelf',
-        'book', 'paper', 'document', 'scan', 'page', 'postcard', 'album', 'photo_album',
-        'collection', 'archive', 'ephemera', 'pile', 'stack', 'box', 'letters',
-        'signature', 'stamp', 'currency', 'coin', 'portrait', 'headshot'
-    ];
-    if (badKeywords.some(k => lowerUrl.includes(k) || lowerTitle.includes(k))) return true;
-    return false;
-};
-
-// 🔓 RELAJAMOS EL FILTRO DE TEXTO
-// Ya no borramos si habla de una persona. Aceptamos biografías si el lugar es válido.
+// ==========================================
+// 🚫 HELPER: DETECTOR DE PERSONAS Y BASURA (FILTRO ESTRICTO)
+// ==========================================
 const isInvalidContext = (text, categories = '') => {
     if (!text && !categories) return false;
-    const lowerText = (text + ' ' + categories).toLowerCase();
     
-    // Solo borramos basura real, no biografías
+    const lowerText = (text + ' ' + categories).toLowerCase();
+
+    // 1. SALVOCONDUCTOS (Palabras de Lugares)
+    const placeKeywords = [
+        'located', 'situated', 'building', 'monument', 'statue', 'museum', 'castle', 
+        'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house of', 'tomb', 
+        'grave', 'memorial', 'bridge', 'theater', 'cinema', 'construction', 'tower',
+        'palace', 'fortress', 'mansion', 'site', 'venue', 'opened', 'founded', 'built',
+        'archaeological', 'temple', 'shrine'
+    ];
+
+    // 2. BANDERAS ROJAS - PERSONAS
+    const personKeywords = [
+        'was a', 'is a', 'born in', 'died in', 'born on', 'died on', 
+        'singer', 'actor', 'musician', 'politician', 'player', 'footballer', 
+        'writer', 'painter', 'poet', 'priest', 'soldier', 'general', 'king', 
+        'queen', 'prince', 'princess', 'composer', 'artist', 'athlete',
+        'chanteur', 'sänger', 'biography', 'people', 'living people', 'portrait'
+    ];
+
+    // 3. 🛑 BANDERAS ROJAS - BASURA / IRRELEVANTE (Aquí evitamos el boxer)
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
-        'furniture', 'poster', 'advertisement', 'logo', 'icon',
-        'coat of arms', 'signature', 'document', 'pdf', 'book cover',
-        'panties', 'boxer', 'shorts', 'swimwear', 'microscope',
-        'insect', 'animal', 'plant', 'flower', 'fungi', 'textile'
+        'interior of', 'furniture', 'poster', 'advertisement', 'text', 'logo', 'icon',
+        'flag', 'coat of arms', 'signature', 'document', 'pdf', 'book cover',
+        'underwear', 'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
+        'insect', 'animal', 'plant', 'flower', 'fungi'
     ];
-    
-    if (trashKeywords.some(w => lowerText.includes(w))) return true;
-    // Solo si es MUY corto y no dice nada útil lo borramos
-    if (lowerText.length < 40) return true; 
-    
+
+    const hasPlace = placeKeywords.some(w => lowerText.includes(w));
+    const hasPerson = personKeywords.some(w => lowerText.includes(w));
+    const hasTrash = trashKeywords.some(w => lowerText.includes(w));
+
+    // Si es basura, descartar SIEMPRE
+    if (hasTrash) return true;
+
+    // Si parece persona Y NO menciona explícitamente que es un lugar físico, descartar
+    if (hasPerson && !hasPlace) return true;
+
     return false;
 };
 
+// ==========================================
+// 🚨 HELPER: DETECTOR DE TRANSPORTE
+// ==========================================
 const isTransportContext = (text) => {
     if (!text) return false;
     const lower = text.toLowerCase();
     return (
-        lower.includes('estacion linea') || lower.includes('estación línea') ||
-        lower.includes('station on line') || lower.includes('metro station') ||
-        lower.includes('subway station') || lower.includes('train station') ||
-        lower.includes('railway station') || lower.includes('bus stop')
+        lower.includes('estacion linea') || 
+        lower.includes('estación línea') ||
+        lower.includes('station on line') || 
+        lower.includes('metro station') ||
+        lower.includes('subway station') ||
+        lower.includes('train station') ||
+        lower.includes('railway station')
     );
 };
 
-const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return 99999; 
-    const R = 6371; 
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c; 
-};
-
 // ==========================================
-// 📡 HELPERS EXTERNOS
+// 2. HELPERS DE WIKIPEDIA (AHORA SOLO INGLÉS)
 // ==========================================
 async function getWikipediaData(lat, lon, targetName) {
     try {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '100', ggslimit: '1', 
+            ggscoord: `${lat}|${lon}`, 
+            ggsradius: '250', 
+            ggslimit: '1',
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
+        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
         const pages = response.data?.query?.pages;
         if (!pages) return null;
+        
         const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
         const description = pages[pageId].extract || "";
-        
-        if (targetName && !areNamesSimilar(pageData.title, targetName)) return null; 
+
+        if (targetName && !areNamesSimilar(pageData.title, targetName)) return null;
+
+        // 🔥 FILTRO ESTRICTO
         if (isInvalidContext(description)) return null;
 
-        let img = pageData.thumbnail?.source || null;
-        if (isInvalidImage(img, pageData.title)) img = null;
-
-        return { hasData: true, title: pageData.title, description: description, imageUrl: img };
+        return {
+            hasData: true,
+            title: pageData.title,
+            description: description,
+            imageUrl: pageData.thumbnail?.source || null
+        };
     } catch (e) { return null; }
 }
 
 async function getWikipediaDataByName(name) {
     try {
         const baseUrl = 'https://en.wikipedia.org/w/api.php'; 
+        
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
             gsrsearch: name, gsrlimit: '1', 
-            prop: 'extracts|pageimages|coordinates', 
-            exintro: '1', explaintext: '1', pithumbsize: '600'
+            prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
+        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
         const pages = response.data?.query?.pages;
         if (!pages) return null;
         const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
         const description = pageData.extract || "";
-        if (isInvalidContext(description)) return null;
-        const coords = pageData.coordinates ? pageData.coordinates[0] : null;
-        
-        let img = pageData.thumbnail?.source || null;
-        if (isInvalidImage(img, pageData.title)) img = null;
 
-        return { 
-            hasData: true, title: pageData.title, description: description, 
-            imageUrl: img,
-            wikiLat: coords ? coords.lat : null, wikiLon: coords ? coords.lon : null
+        if (isInvalidContext(description)) return null;
+
+        return {
+            hasData: true,
+            title: pageData.title,
+            description: description,
+            imageUrl: pageData.thumbnail?.source || null
         };
     } catch (e) { return null; }
 }
 
+// 🔥 FUNCIÓN OPTIMIZADA: Commons con Filtro de Contenido
 async function getCommonsImages(locationName) {
     try {
         const baseUrl = 'https://commons.wikimedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
-            gsrsearch: `${locationName}`, 
-            gsrnamespace: '6', gsrlimit: '3',
-            prop: 'imageinfo', iiprop: 'url|extmetadata', iiurlwidth: '800', origin: '*'
+            gsrsearch: locationName, gsrnamespace: '6', gsrlimit: '5', // Subimos el límite para tener de donde elegir si filtramos
+            prop: 'imageinfo', 
+            iiprop: 'url|extmetadata', 
+            iiurlwidth: '800', 
+            origin: '*'
         });
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
+        const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 4000 });
         const pages = response.data?.query?.pages;
         if (!pages) return [];
         
         const validImages = Object.values(pages).map(p => {
             const info = p.imageinfo?.[0];
             const meta = info?.extmetadata || {};
+            const categories = meta.Categories?.value || "";
+            const desc = meta.ImageDescription?.value || "";
+
+            // 🔥 FILTRO DE CONTEXTO (Basura / Personas)
+            if (isInvalidContext(desc, categories)) return null;
+
+            // 🔥 FILTRO DE FORMATO DE ARCHIVO (Solo imágenes reales)
             const finalUrl = info?.thumburl || info?.url;
-            const title = p.title || '';
-            if (!finalUrl || isInvalidImage(finalUrl, title)) return null;
+            if (!finalUrl) return null;
+            
+            const lowerUrl = finalUrl.toLowerCase();
             const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-            if (!validExtensions.some(ext => finalUrl.toLowerCase().includes(ext))) return null;
-            return { url: finalUrl, author: cleanWikiText(meta.Artist?.value), license: meta.LicenseShortName?.value };
+            if (!validExtensions.some(ext => lowerUrl.includes(ext))) {
+                // Si es .tif, .svg, .pdf, lo descartamos porque React Native a veces falla con ellos
+                return null;
+            }
+
+            return {
+                url: finalUrl,
+                author: cleanWikiText(meta.Artist?.value),
+                license: meta.LicenseShortName?.value
+            };
         }).filter(item => item !== null); 
-        return validImages.slice(0, 1); 
+        
+        // Devolvemos solo las válidas (limitado a 3 después de filtrar)
+        return validImages.slice(0, 3);
+
     } catch (e) { return []; }
 }
 
 async function getMapillaryImage(lat, lon) {
     try {
         const MAPILLARY_TOKEN = 'MLY|25296378576723082|c74a374cec37733c10c8879dd9878e67'; 
-        const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}&fields=id,thumb_1024_url&is_pano=false&closeto=${lon},${lat}&radius=30&limit=1`;
-        const res = await axios.get(url, { timeout: 2000 });
+        const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}&fields=id,thumb_1024_url&is_pano=false&closeto=${lon},${lat}&radius=1000&limit=1`;
+        const res = await axios.get(url, { timeout: 4000 });
         return res.data.data?.[0]?.thumb_1024_url || null;
     } catch (e) { return null; }
 }
 
 // ==========================================
-// ⚙️ WORKER DE FOTOS
+// 3. WORKER DE FOTOS
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
-    const BATCH_SIZE = 2; 
+    const BATCH_SIZE = 5; 
     for (let i = 0; i < elements.length; i += BATCH_SIZE) {
         const batch = elements.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (item) => {
             try {
                 const hasImages = item.images && item.images.length > 0 && item.images[0] !== null;
-                if (!hasImages) {
-                    const name = item.name;
+                const missingAuthor = !item.author;
+
+                if (!hasImages || missingAuthor) {
+                    const name = item.name || item.tags?.['name:en'] || item.tags?.name; 
                     const lat = item.latitude || item.lat;
                     const lon = item.longitude || item.lon;
+
                     if (name) {
-                        let bestCandidate = { imageUrl: null, images: [], description: null, author: null, license: null };
-                        
+                        let bestCandidate = {
+                            imageUrl: null,
+                            images: [],
+                            description: null,
+                            author: null,
+                            license: null
+                        };
+
+                        // 1. INTENTO WIKIPEDIA
                         let wikiData = null;
                         if (lat && lon) wikiData = await getWikipediaData(lat, lon, name);
+
+                        // Fallback
                         if (!wikiData?.hasData || !wikiData?.imageUrl) {
                             const cleanName = name.replace(/The |El |La /g, ''); 
-                            const searchQuery = item.country ? `${cleanName} ${item.country}` : cleanName;
-                            const textResult = await getWikipediaDataByName(searchQuery);
-                            if (textResult && textResult.wikiLat && textResult.wikiLon && lat && lon) {
-                                const dist = getDistanceFromLatLonInKm(lat, lon, textResult.wikiLat, textResult.wikiLon);
-                                if (dist < 40) wikiData = textResult; 
-                            }
+                            wikiData = await getWikipediaDataByName(cleanName);
                         }
                         
-                        if (wikiData?.hasData && !isTransportContext(wikiData.description)) {
-                             if (wikiData.imageUrl) {
-                                 bestCandidate.imageUrl = wikiData.imageUrl;
-                                 bestCandidate.images.push(wikiData.imageUrl);
-                             }
-                             bestCandidate.description = wikiData.description;
+                        if (wikiData?.hasData) {
+                            if (isTransportContext(wikiData.description)) wikiData = null;
                         }
 
-                        if (bestCandidate.images.length === 0) {
-                            const gallery = await getCommonsImages(name);
-                            if (gallery.length > 0) bestCandidate.imageUrl = gallery[0].url; 
+                        if (wikiData?.hasData) {
+                            if (wikiData.imageUrl) {
+                                bestCandidate.imageUrl = wikiData.imageUrl;
+                                bestCandidate.images.push(wikiData.imageUrl);
+                            }
+                            bestCandidate.description = wikiData.description;
                         }
 
+                        // 2. INTENTO COMMONS
+                        const gallery = await getCommonsImages(name);
+                        
+                        if (gallery.length > 0) {
+                            if (gallery[0].author) {
+                                bestCandidate.imageUrl = gallery[0].url; 
+                                bestCandidate.author = gallery[0].author;
+                                bestCandidate.license = gallery[0].license;
+                                const commonsUrls = gallery.map(g => g.url);
+                                bestCandidate.images = [...commonsUrls, ...bestCandidate.images]; 
+                            } else {
+                                bestCandidate.images.push(...gallery.map(g => g.url));
+                            }
+                        }
+
+                        // 3. INTENTO MAPILLARY
                         if (bestCandidate.images.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
-                            if (streetPhoto) bestCandidate.imageUrl = streetPhoto;
+                            if (streetPhoto) {
+                                bestCandidate.imageUrl = streetPhoto;
+                                bestCandidate.images.push(streetPhoto);
+                            }
                         }
 
-                        if (bestCandidate.imageUrl || bestCandidate.description) {
+                        // 4. GUARDAR
+                        if (bestCandidate.imageUrl || bestCandidate.description || bestCandidate.author) {
                             const uniqueImages = [...new Set(bestCandidate.images)];
-                            const postgresArray = uniqueImages.length > 0 ? `{${uniqueImages.map(url => `"${url}"`).join(',')}}` : null; 
-                            
+                            const postgresArray = uniqueImages.length > 0 
+                                ? `{${uniqueImages.map(url => `"${url}"`).join(',')}}` 
+                                : item.images;
+                                
                             await db.raw(
                                 `UPDATE historical_locations 
-                                 SET images = ?, image_url = ?, description = COALESCE(?, description), author = ?, license = ?
+                                 SET images = ?, 
+                                     image_url = ?, 
+                                     description = COALESCE(?, description),
+                                     author = ?,
+                                     license = ?
                                  WHERE name = ?`, 
-                                [postgresArray, bestCandidate.imageUrl || null, bestCandidate.description, bestCandidate.author || null, bestCandidate.license || null, name]
+                                [
+                                    postgresArray, 
+                                    bestCandidate.imageUrl || item.image_url,
+                                    bestCandidate.description,
+                                    bestCandidate.author || item.author,
+                                    bestCandidate.license || item.license,
+                                    name
+                                ]
                             );
                         }
                     }
                 }
-            } catch (err) { console.error(`Err Background ${item.name}: ${err.message}`); }
+            } catch (err) { console.error(`Err ${item.name}: ${err.message}`); }
         }));
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 200));
     }
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (VUELVEN TODOS) 🌟
+// 4. EL PORTERO
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // ✅ CATEGORÍAS RESTAURADAS
-    const ALLOWED_CATEGORIES = new Set([
-        'Castles', 'Ruins', 'Museums', 
-        'Stolperstein', 'Religious', 'Towers',
-        'Statues', 'Busts', 'Plaques', 
-        'Historic Site', 'Tourist', 'Monuments' 
-    ]);
-
-    const validRows = [];
-    
-    for (const item of elements) {
+    const insertPromises = elements.map(async (item) => {
         const t = item.tags || {};
         const name = t['name:en'] || t.name || t['name:es']; 
-        
-        if (!name && t['memorial:type'] !== 'stolperstein') continue;
-        if (isTransportContext(name)) continue;
+        if (!name) return null;
 
-        if (t.railway || t.public_transport || t.highway || t.shop || 
+        if (isTransportContext(name)) return null;
+
+        if (
+            t.railway || t.public_transport || t.highway === 'bus_stop' || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
-            t.amenity === 'parking' || t.amenity === 'atm' || 
-            t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
+            t.amenity === 'ferry_terminal' || t.amenity === 'bicycle_rental' ||
+            name.toLowerCase().includes('subte') || name.toLowerCase().includes('estación') ||
+            name.toLowerCase().includes('station') || name.toLowerCase().includes('parada') ||
+            name.toLowerCase().includes('terminal')
+        ) {
+            return null; 
+        }
 
-        let cat = 'Historic Site'; // Por defecto, si es histórico, entra
-
-        // CLASIFICACIÓN
-        if (t.historic === 'ruins') cat = 'Ruins';
-        else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
-        else if (t.tourism === 'museum') cat = 'Museums';
-        else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery' || t.building === 'cathedral') cat = 'Religious';
-        else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) cat = 'Towers';
-        else if (t.tourism === 'viewpoint' || t.tourism === 'attraction') cat = 'Tourist';
+        const iLat = item.lat || item.center?.lat;
+        const iLon = item.lon || item.center?.lon;
         
-        else if (t.historic === 'memorial' || t.tourism === 'artwork') {
-            const memType = t['memorial:type'];
-            if (memType === 'stolperstein') cat = 'Stolperstein';
-            else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
-            else if (memType === 'bust') cat = 'Busts';
-            else if (memType === 'statue') cat = 'Statues'; 
-            else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
-            else cat = 'Monuments'; 
-        }
+        let cat = 'Others';
+        if (t.historic === 'ruins') cat = 'Ruins';
+        else if (t.tourism === 'museum') cat = 'Museums';
+        else if (['castle', 'fortress', 'citywalls', 'manor', 'palace'].includes(t.historic)) cat = 'Castles';
+        else if (t.historic === 'monument' || t.historic === 'memorial') cat = 'Monuments';
+        else if (t.historic === 'building') cat = 'Historic Site';
+        else if (t.tourism === 'attraction') cat = 'Historic Site';
+        else if (t.tourism === 'artwork') cat = 'Monuments'; 
 
-        if (cat && ALLOWED_CATEGORIES.has(cat)) {
-            let finalAddress = locationLabel;
-            const city = t['addr:city'] || t['addr:town'];
-            const street = t['addr:street'];
-            if (city) finalAddress = street ? `${street}, ${city}` : city;
-            const safeAddress = finalAddress.length > 90 ? finalAddress.substring(0, 90) + '...' : finalAddress;
-            const iLat = item.lat || item.center?.lat;
-            const iLon = item.lon || item.center?.lon;
-
-            validRows.push({
-                name: name || 'Stolperstein',
-                category: cat,
-                description: 'Discovered via exploration.',
-                country: safeAddress,
-                lat: iLat,
-                lon: iLon
-            });
-        }
-    }
-
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
-        const batch = validRows.slice(i, i + BATCH_SIZE);
-        await Promise.all(batch.map(row => 
-            db.raw(
-                `INSERT INTO historical_locations (name, category, description, country, geom) 
-                 VALUES (?, ?, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326)) 
-                 ON CONFLICT (name) DO NOTHING`, 
-                [row.name, row.category, row.description, row.country, row.lon, row.lat]
-            )
-        ));
-    }
+        let finalAddress = locationLabel;
+        const city = t['addr:city'] || t['addr:town'] || t['addr:village'];
+        const street = t['addr:street'];
+        if (city) finalAddress = street ? `${street}, ${city}` : city;
+        const safeAddress = finalAddress.length > 90 ? finalAddress.substring(0, 90) + '...' : finalAddress;
+        
+        return db.raw(`INSERT INTO historical_locations (name, category, description, country, geom) VALUES (?, ?, ?, ?, ST_SetSRID(ST_MakePoint(?, ?), 4326)) ON CONFLICT (name) DO NOTHING`, [name, cat, 'Discovered via exploration.', safeAddress, iLon, iLat]);
+    });
+    await Promise.all(insertPromises);
 }
 
 // ==========================================
-// 🕹️ CONTROLADOR PRINCIPAL
+// ✅ ENDPOINT: OBTENER DESCRIPCIÓN
+// ==========================================
+export const getLocationDescription = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await db.raw(`SELECT description FROM historical_locations WHERE id = ?`, [id]);
+        if (result.rows.length > 0) {
+            res.json({ description: result.rows[0].description });
+        } else {
+            res.status(404).json({ error: "Lugar no encontrado" });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Error de servidor" });
+    }
+};
+
+// ==========================================
+// 5. CONTROLADOR PRINCIPAL
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
-    req.setTimeout(30000); 
+    req.setTimeout(120000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
@@ -341,27 +399,33 @@ export const getLocalizaciones = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    const fetchFromDB = async () => {
+    try {
         let selectValues = [], whereValues = [], orderValues = [];
+        
         let selectFields = `
-            id, name, category, image_url, images, author, license,
-            CASE WHEN LENGTH(description) > 180 THEN LEFT(description, 180) || '...' ELSE description END AS description,
-            country, ST_X(geom) AS longitude, ST_Y(geom) AS latitude
+            id, 
+            name, 
+            category, 
+            image_url, 
+            images, 
+            author, 
+            license,
+            CASE 
+                WHEN LENGTH(description) > 180 THEN LEFT(description, 180) || '...' 
+                ELSE description 
+            END AS description,
+            country, 
+            ST_X(geom) AS longitude, 
+            ST_Y(geom) AS latitude
         `;
+        
         if (lat && lon) {
             selectFields += `, ST_Distance(geom::geography, ST_MakePoint(?, ?)::geography) as distance_meters`;
             selectValues.push(parseFloat(lon), parseFloat(lat)); 
         }
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
-        if (!category || category === 'All') {
-            // 🔥 INCLUIMOS TODO DE NUEVO
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers', 'Historic Site', 'Monuments', 'Tourist')`;
-        } else {
-            baseWhere += ` AND category = ?`;
-            whereValues.push(category);
-        }
-
+        
         if (lat && lon && !search) {
             baseWhere += ` AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, 80000)`; 
             whereValues.push(parseFloat(lon), parseFloat(lat));
@@ -377,6 +441,11 @@ export const getLocalizaciones = async (req, res) => {
             baseWhere += ` AND (${orConditions.join(' OR ')})`;
         }
         
+        if (category && category !== 'All') {
+            baseWhere += ` AND category = ?`;
+            whereValues.push(category);
+        }
+
         let orderByClause = `ORDER BY id DESC`; 
         if (lat && lon && !search) {
             orderByClause = `ORDER BY geom <-> ST_SetSRID(ST_MakePoint(?, ?), 4326)`;
@@ -385,89 +454,118 @@ export const getLocalizaciones = async (req, res) => {
 
         const finalQuery = `SELECT ${selectFields} ${baseWhere} ${orderByClause} LIMIT ? OFFSET ?`;
         const allValues = [...selectValues, ...whereValues, ...orderValues, limit, offset];
-        const result = await db.raw(finalQuery, allValues);
-        return result.rows;
-    };
+        
+        const initialResult = await db.raw(finalQuery, allValues);
+        let dataToSend = initialResult.rows;
 
-    try {
-        let dataToSend = await fetchFromDB();
-
-        let explorationNeeded = false;
-        let bbox = null;
-        let areaName = "Explored Area";
-
-        if (page === 1) {
-            if (search.length > 3 && dataToSend.length < 5) {
-                 const nominatimInfo = await getNominatimData(search);
-                 if (nominatimInfo && nominatimInfo.type !== 'country') {
-                     const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
-                     if (isArea) {
-                         bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 15); 
-                         areaName = nominatimInfo.displayName;
-                         explorationNeeded = true;
-                     }
-                 }
-            } else if (lat && lon && !search) {
-                const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 1000);
-                if (dataToSend.length < 5 || nearbyItems.length < 3) {
-                    areaName = await getReverseNominatim(lat, lon);
-                    bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 15);
-                    explorationNeeded = true;
-                }
-            }
-        }
-
-        if (explorationNeeded && bbox) {
-            console.log(`🌍 Deep Scan (Amplio) en ${areaName}...`);
+        // --- CASO A: BÚSQUEDA POR TEXTO ---
+        if (page === 1 && dataToSend.length === 0 && search.length > 3) {
+            console.log(`🔎 [Caso A] Buscando: "${search}"`);
+            const nominatimInfo = await getNominatimData(search);
             
-            // 🔥 QUERY AMPLIA: Recuperamos Historic y Tourism
-            const overpassQuery = `
-                [out:json][timeout:15];
-                (
-                    nwr["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["landmark"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                );
-                (._; >;);
-                out center;
-            `;
+            if (nominatimInfo && nominatimInfo.type !== 'country') {
+                const isArea = ['city','administrative','county','state','town','village','region', 'municipality'].includes(nominatimInfo.type) || ['place','boundary'].includes(nominatimInfo.class);
 
-            try {
-                const fetchPromise = fetchOverpassData(overpassQuery, 250000);
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 10000));
-                const elements = await Promise.race([fetchPromise, timeoutPromise]);
+                if (isArea) {
+                    const displayNameLower = nominatimInfo.displayName.toLowerCase();
+                    const isDenseCity = DENSE_CITIES.some(city => displayNameLower.includes(city));
+                    
+                    let bbox;
+                    if (nominatimInfo.bbox && !isDenseCity) bbox = nominatimInfo.bbox;
+                    else bbox = getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, isDenseCity ? 13.5 : 12);
+                    
+                    const maxResults = 200;
+                    
+                    const query = `
+                        [out:json][timeout:60];
+                        (
+                            nwr["historic"~"castle|fortress|ruins|monument|memorial|manor|building|archaeological_site|battlefield"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                            nwr["tourism"~"museum|artwork|viewpoint|attraction|gallery"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                        );
+                        out center ${maxResults};
+                    `;
 
-                if (elements && elements.length > 0) {
-                    console.log(`✅ Overpass encontró ${elements.length} lugares.`);
-                    await insertElementsToDB(elements, areaName);
-                    dataToSend = await fetchFromDB();
+                    const elements = await fetchOverpassData(query, 90000);
+
+                    if (elements.length > 0) {
+                        await insertElementsToDB(elements, nominatimInfo.displayName);
+                        const tempResult = await db.raw(finalQuery, allValues);
+                        const itemsToProcess = tempResult.rows;
+                        if (itemsToProcess.length > 0) {
+                            await Promise.race([
+                                processImagesInBatches(itemsToProcess.slice(0, 1)), 
+                                new Promise(r => setTimeout(r, 3000))
+                            ]);
+                            if (itemsToProcess.length > 1) processImagesInBatches(itemsToProcess.slice(1)).catch(console.error);
+                        }
+                        const finalResult = await db.raw(finalQuery, allValues);
+                        dataToSend = finalResult.rows;
+                    }
                 }
-            } catch (err) {
-                console.log("⏩ Timeout de exploración.");
             }
         }
 
-        console.log(`⚡ Enviando ${dataToSend.length} resultados.`);
-        res.json({ page, limit, data: dataToSend });
+        // --- CASO B: BÚSQUEDA POR COORDENADAS ---
+        else if (page === 1 && lat && lon && !search) { 
+            const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
+            
+            if (dataToSend.length < 10 || nearbyItems.length < 3) {
+                console.log(`📍 [Caso B] Zona GPS vacía.`);
+                
+                const areaName = await getReverseNominatim(lat, lon);
+                const bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 12);
+                const maxResults = 200; 
+                
+                const query = `
+                    [out:json][timeout:60];
+                    (
+                        nwr["historic"~"castle|fortress|ruins|monument|memorial|manor|building|archaeological_site|battlefield"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                        nwr["tourism"~"museum|artwork|viewpoint|attraction|gallery"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    );
+                    out center ${maxResults}; 
+                `;
 
+                const elements = await fetchOverpassData(query, 90000);
+
+                if (elements.length > 0) {
+                    await insertElementsToDB(elements, areaName);
+                    const tempResult = await db.raw(finalQuery, allValues);
+                    const itemsToProcess = tempResult.rows;
+                    if (itemsToProcess.length > 0) {
+                        const priorityBatch = itemsToProcess.slice(0, 1);
+                        const backgroundBatch = itemsToProcess.slice(1);
+                        await Promise.race([
+                            processImagesInBatches(priorityBatch),
+                            new Promise(resolve => setTimeout(resolve, 3000))
+                        ]);
+                        if (backgroundBatch.length > 0) {
+                            processImagesInBatches(backgroundBatch).catch(console.error);
+                        }
+                    }
+                    const finalResult = await db.raw(finalQuery, allValues);
+                    dataToSend = finalResult.rows;
+                }
+            }
+        }
+
+        // RELLENO DE FOTOS (Background)
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
-            processImagesInBatches(itemsSinFoto).catch(err => console.error(err));
+             const vipFix = itemsSinFoto.slice(0, 1);
+             const bgFix = itemsSinFoto.slice(1);
+             if (vipFix.length > 0) await processImagesInBatches(vipFix);
+             if (bgFix.length > 0) processImagesInBatches(bgFix).catch(console.error);
+             const finalRefresh = await db.raw(finalQuery, allValues);
+             dataToSend = finalRefresh.rows;
         }
+
+        console.log(`✅ Enviando ${dataToSend.length} resultados.`);
+        res.json({ page, limit, data: dataToSend });
 
     } catch (error) {
         console.error("🔥 Error Controller:", error.message);
         if (!res.headersSent) res.status(500).json({ error: "Server Error" });
     }
-};
-
-export const getLocationDescription = async (req, res) => {
-    const { id } = req.params;
-    try {
-        const result = await db.raw(`SELECT description FROM historical_locations WHERE id = ?`, [id]);
-        if (result.rows.length > 0) res.json({ description: result.rows[0].description });
-        else res.status(404).json({ error: "Lugar no encontrado" });
-    } catch (error) { res.status(500).json({ error: "Error de servidor" }); }
 };
 
 export const getProxyImage = async (req, res) => {
@@ -476,6 +574,7 @@ export const getProxyImage = async (req, res) => {
         if (!url) return res.status(400).send('Falta URL');
         const response = await axios({ url: decodeURIComponent(url), method: 'GET', responseType: 'stream', headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
         res.set('Content-Type', response.headers['content-type']);
+        res.set('Cache-Control', 'public, max-age=86400');
         response.data.pipe(res);
     } catch (error) { if (!res.headersSent) res.status(404).end(); }
 };
