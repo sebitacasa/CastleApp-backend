@@ -10,7 +10,7 @@ import {
 } from '../services/externalApis.js'; 
 
 // ==========================================
-// 🧹 HELPERS DE LIMPIEZA
+// 🧹 HELPERS Y FILTROS (Mantenemos la limpieza)
 // ==========================================
 const cleanWikiText = (html) => {
     if (!html) return null;
@@ -28,12 +28,10 @@ const areNamesSimilar = (name1, name2) => {
     return matches.length >= 1; 
 };
 
-// 🔥 FILTRO ANTI-BASURA AGRESIVO
 const isInvalidImage = (url, title = '') => {
     if (!url) return true;
     const lowerUrl = url.toLowerCase();
     const lowerTitle = title.toLowerCase();
-
     const badKeywords = [
         'svg', 'logo', 'icon', 'map', 'diagram', 'chart', 'plan', 'drawing', 'sketch',
         'textile', 'clothing', 'shirt', 'fabric', 'underwear', 'garment', 'hat',
@@ -43,7 +41,6 @@ const isInvalidImage = (url, title = '') => {
         'collection', 'archive', 'ephemera', 'pile', 'stack', 'box', 'letters',
         'signature', 'stamp', 'currency', 'coin'
     ];
-
     if (badKeywords.some(k => lowerUrl.includes(k) || lowerTitle.includes(k))) return true;
     return false;
 };
@@ -67,10 +64,8 @@ const isInvalidContext = (text, categories = '') => {
         'insect', 'animal', 'plant', 'flower', 'fungi', 'textile', 'fabric',
         'biography', 'born', 'died'
     ];
-    const hasPlace = placeKeywords.some(w => lowerText.includes(w));
-    const hasTrash = trashKeywords.some(w => lowerText.includes(w));
-    if (hasTrash) return true;
-    if (!hasPlace && lowerText.length < 50) return true; 
+    if (trashKeywords.some(w => lowerText.includes(w))) return true;
+    if (!placeKeywords.some(w => lowerText.includes(w)) && lowerText.length < 50) return true; 
     return false;
 };
 
@@ -264,15 +259,13 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (MODO ÉLITE) 🏰
+// 🛡️ EL PORTERO (Insertar)
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // ⚔️ LISTA EXTREMADAMENTE ESTRICTA
-    // Eliminado: Others, Historic Site genérico, Memorials, Artwork
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Stolperstein', 'Religious', 'Towers',
-        'Statues', 'Busts', 'Plaques' // Solo si son explícitas
+        'Statues', 'Busts', 'Plaques'
     ]);
 
     const validRows = [];
@@ -284,34 +277,26 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         if (!name && t['memorial:type'] !== 'stolperstein') continue;
         if (isTransportContext(name)) continue;
 
-        // Filtro de basura rápido
         if (t.railway || t.public_transport || t.highway || t.shop || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
-            t.amenity === 'parking' || t.amenity === 'atm' || 
-            t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
+            t.amenity === 'parking' || t.amenity === 'atm') continue;
 
-        let cat = null; // Por defecto es NULL (rechazado)
+        let cat = null; 
 
-        // 1. CLASIFICACIÓN EXACTA
         if (t.historic === 'ruins') cat = 'Ruins';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         else if (t.tourism === 'museum') cat = 'Museums';
         else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery' || t.building === 'cathedral') cat = 'Religious';
         else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) cat = 'Towers';
         
-        // 2. MONUMENTOS ESPECÍFICOS
         else if (t.historic === 'memorial' || t.tourism === 'artwork') {
             const memType = t['memorial:type'];
-            // SOLO permitimos tipos específicos. Si es genérico, se va.
             if (memType === 'stolperstein') cat = 'Stolperstein';
             else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
             else if (memType === 'bust') cat = 'Busts';
             else if (memType === 'statue') cat = 'Statues'; 
             else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
         }
-
-        // Si después de todo esto cat sigue siendo null (ej. un mural, un banco, un sitio histórico genérico),
-        // se ignora y no entra al array.
 
         if (cat && ALLOWED_CATEGORIES.has(cat)) {
             let finalAddress = locationLabel;
@@ -348,10 +333,11 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// 🕹️ CONTROLADOR PRINCIPAL
+// 🕹️ CONTROLADOR PRINCIPAL (CON TIMEOUT SEGURO)
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
-    req.setTimeout(60000); 
+    // Timeout del servidor express
+    req.setTimeout(30000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
@@ -359,8 +345,8 @@ export const getLocalizaciones = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    try {
-        // --- QUERY SQL BASE ---
+    // Función auxiliar para obtener datos de la DB
+    const fetchFromDB = async () => {
         let selectValues = [], whereValues = [], orderValues = [];
         let selectFields = `
             id, name, category, image_url, images, author, license,
@@ -373,8 +359,6 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
-        
-        // Mantenemos la lógica de filtro
         if (!category || category === 'All') {
             baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers')`;
         } else {
@@ -387,7 +371,6 @@ export const getLocalizaciones = async (req, res) => {
             whereValues.push(parseFloat(lon), parseFloat(lat));
         }
 
-        // ... resto de filtros (búsqueda, orden) ...
         const searchTerms = getExpandedSearchTerms(search); 
         if (searchTerms.length > 0) {
             const orConditions = [];
@@ -406,22 +389,26 @@ export const getLocalizaciones = async (req, res) => {
 
         const finalQuery = `SELECT ${selectFields} ${baseWhere} ${orderByClause} LIMIT ? OFFSET ?`;
         const allValues = [...selectValues, ...whereValues, ...orderValues, limit, offset];
-        
-        const initialResult = await db.raw(finalQuery, allValues);
-        let dataToSend = initialResult.rows;
+        const result = await db.raw(finalQuery, allValues);
+        return result.rows;
+    };
 
-        // --- DEEP SCAN ULTRA-OPTIMIZADO ---
+    try {
+        // 1. Obtenemos datos iniciales
+        let dataToSend = await fetchFromDB();
+
+        // 2. Lógica de Deep Scan (Exploración)
         let explorationNeeded = false;
         let bbox = null;
         let areaName = "Explored Area";
 
         if (page === 1) {
-            if (search.length > 3 && dataToSend.length < 5) { // Solo si hay MUY pocos resultados
+            if (search.length > 3 && dataToSend.length < 5) {
                  const nominatimInfo = await getNominatimData(search);
                  if (nominatimInfo && nominatimInfo.type !== 'country') {
                      const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
                      if (isArea) {
-                         // ZOOM 15: Buscamos en el barrio, no en la ciudad entera. Mucho más rápido.
+                         // Zoom 15 = Barrio, no ciudad entera.
                          bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 15); 
                          areaName = nominatimInfo.displayName;
                          explorationNeeded = true;
@@ -438,33 +425,46 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         if (explorationNeeded && bbox) {
-            console.log(`🌍 Explorando Overpass (Deep Scan) para: ${areaName}`);
-            // 🔥 LA SOLUCIÓN MÁGICA:
-            // En lugar de pedir "todo lo histórico" (nwr["historic"]), pedimos SOLO lo que nos importa.
-            // Esto reduce la carga de miles de items a unos pocos cientos valiosos.
+            console.log(`🌍 Intentando Deep Scan en ${areaName} (Max 8 segs)...`);
+            
+            // 🔥 QUERY OVERPASS ULTRA-ESPECÍFICA (Solo lo VIP)
             const overpassQuery = `
-                [out:json][timeout:25];
+                [out:json][timeout:8];
                 (
-                    nwr["historic"~"castle|fortress|palace|ruins|tower|city_gate|church|monastery|wayside_shrine"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["building"="cathedral"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"~"castle|fortress|palace|ruins|tower|city_gate"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["memorial:type"="stolperstein"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["building"="cathedral"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
                 out center;
             `;
 
-            const elements = await fetchOverpassData(overpassQuery, 150000); 
-            if (elements.length > 0) {
-                await insertElementsToDB(elements, areaName);
-                const finalResult = await db.raw(finalQuery, allValues);
-                dataToSend = finalResult.rows;
+            try {
+                // ⏱️ TIMEOUT MANUAL: Si fetchOverpassData tarda > 8s, lo cancelamos
+                const fetchPromise = fetchOverpassData(overpassQuery, 100000);
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 8000));
+
+                const elements = await Promise.race([fetchPromise, timeoutPromise]);
+
+                if (elements && elements.length > 0) {
+                    console.log(`✅ Overpass encontró ${elements.length} lugares. Insertando...`);
+                    await insertElementsToDB(elements, areaName);
+                    // Refrescamos datos de la DB
+                    dataToSend = await fetchFromDB();
+                }
+            } catch (err) {
+                if (err.message === 'TIMEOUT_OVERPASS') {
+                    console.log("⏩ Deep Scan tardó demasiado. Saltando y enviando datos locales.");
+                } else {
+                    console.error("⚠️ Error en Deep Scan:", err.message);
+                }
             }
         }
 
-        console.log(`⚡ Enviando ${dataToSend.length} resultados al usuario.`);
+        console.log(`⚡ Enviando ${dataToSend.length} resultados.`);
         res.json({ page, limit, data: dataToSend });
 
+        // Background jobs
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
             processImagesInBatches(itemsSinFoto).catch(err => console.error(err));
@@ -475,7 +475,7 @@ export const getLocalizaciones = async (req, res) => {
         if (!res.headersSent) res.status(500).json({ error: "Server Error" });
     }
 };
-// ... (exportar las otras funciones getLocationDescription y getProxyImage igual que antes) ...
+
 export const getLocationDescription = async (req, res) => {
     const { id } = req.params;
     try {
