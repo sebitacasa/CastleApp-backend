@@ -28,23 +28,20 @@ const areNamesSimilar = (name1, name2) => {
     return matches.length >= 1; 
 };
 
-// 🔥 FILTRO ANTI-BASURA (Nivel Experto)
+// 🔥 FILTRO ANTI-BASURA AGRESIVO
 const isInvalidImage = (url, title = '') => {
     if (!url) return true;
     const lowerUrl = url.toLowerCase();
     const lowerTitle = title.toLowerCase();
 
     const badKeywords = [
-        // Formatos no fotográficos
         'svg', 'logo', 'icon', 'map', 'diagram', 'chart', 'plan', 'drawing', 'sketch',
-        // Ropa y objetos domésticos
         'textile', 'clothing', 'shirt', 'fabric', 'underwear', 'garment', 'hat',
         'food', 'dish', 'plate', 'menu', 'bottle',
         'interior', 'room', 'furniture', 'chair', 'table', 'shelf',
-        // 📄 ELIMINADOR DE PAPELES Y ARCHIVOS (Para borrar tu foto recurrente)
         'book', 'paper', 'document', 'scan', 'page', 'postcard', 'album', 'photo_album',
         'collection', 'archive', 'ephemera', 'pile', 'stack', 'box', 'letters',
-        'portrait', 'person', 'people', 'man', 'woman', 'child', 'face' // Evitar fotos de gente random
+        'signature', 'stamp', 'currency', 'coin'
     ];
 
     if (badKeywords.some(k => lowerUrl.includes(k) || lowerTitle.includes(k))) return true;
@@ -62,14 +59,13 @@ const isInvalidContext = (text, categories = '') => {
         'shrine', 'stolperstein', 'chapel', 'monastery', 'abbey', 'basilica', 
         'landmark', 'history', 'tourist', 'viewpoint', 'attraction'
     ];
-    // Palabras que delatan que NO es un lugar físico visitable
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
         'interior of', 'furniture', 'poster', 'advertisement', 'logo', 'icon',
         'flag', 'coat of arms', 'signature', 'document', 'pdf', 'book cover',
         'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
         'insect', 'animal', 'plant', 'flower', 'fungi', 'textile', 'fabric',
-        'biography', 'born', 'died' // Si habla de una persona, no del lugar
+        'biography', 'born', 'died'
     ];
     const hasPlace = placeKeywords.some(w => lowerText.includes(w));
     const hasTrash = trashKeywords.some(w => lowerText.includes(w));
@@ -107,7 +103,7 @@ async function getWikipediaData(lat, lon, targetName) {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '80', ggslimit: '1', // Radio muy estricto (80m)
+            ggscoord: `${lat}|${lon}`, ggsradius: '80', ggslimit: '1', 
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
@@ -117,12 +113,11 @@ async function getWikipediaData(lat, lon, targetName) {
         const pageData = pages[pageId];
         const description = pages[pageId].extract || "";
         
-        // Si el nombre no se parece, fuera.
         if (targetName && !areNamesSimilar(pageData.title, targetName)) return null; 
         if (isInvalidContext(description)) return null;
 
         let img = pageData.thumbnail?.source || null;
-        if (isInvalidImage(img, pageData.title)) img = null; // Si la imagen es mala, la matamos aquí
+        if (isInvalidImage(img, pageData.title)) img = null;
 
         return { hasData: true, title: pageData.title, description: description, imageUrl: img };
     } catch (e) { return null; }
@@ -160,10 +155,9 @@ async function getWikipediaDataByName(name) {
 async function getCommonsImages(locationName) {
     try {
         const baseUrl = 'https://commons.wikimedia.org/w/api.php';
-        // Buscamos exacto o nada
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'search',
-            gsrsearch: `${locationName}`, // Quitamos "view" para no forzar resultados
+            gsrsearch: `${locationName}`, 
             gsrnamespace: '6', gsrlimit: '3',
             prop: 'imageinfo', iiprop: 'url|extmetadata', iiurlwidth: '800', origin: '*'
         });
@@ -176,17 +170,12 @@ async function getCommonsImages(locationName) {
             const meta = info?.extmetadata || {};
             const finalUrl = info?.thumburl || info?.url;
             const title = p.title || '';
-            
-            if (!finalUrl) return null;
-            // 🛑 FILTRO FINAL: Si parece papel/archivo/basura, DEVUELVE NULL
-            if (isInvalidImage(finalUrl, title)) return null;
-
+            if (!finalUrl || isInvalidImage(finalUrl, title)) return null;
             const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
             if (!validExtensions.some(ext => finalUrl.toLowerCase().includes(ext))) return null;
             return { url: finalUrl, author: cleanWikiText(meta.Artist?.value), license: meta.LicenseShortName?.value };
         }).filter(item => item !== null); 
-        
-        return validImages.slice(0, 1); // Solo la mejor, si es que hay una buena
+        return validImages.slice(0, 1); 
     } catch (e) { return []; }
 }
 
@@ -200,7 +189,7 @@ async function getMapillaryImage(lat, lon) {
 }
 
 // ==========================================
-// ⚙️ WORKER DE FOTOS (LOGICA "NULL" ACTIVADA)
+// ⚙️ WORKER DE FOTOS
 // ==========================================
 const processImagesInBatches = async (elements) => {
     if (!elements || elements.length === 0) return;
@@ -209,9 +198,7 @@ const processImagesInBatches = async (elements) => {
         const batch = elements.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (item) => {
             try {
-                // Solo procesamos si NO tiene foto o si la foto actual es la mala (esto es opcional pero ayuda a limpiar)
                 const hasImages = item.images && item.images.length > 0 && item.images[0] !== null;
-                
                 if (!hasImages) {
                     const name = item.name;
                     const lat = item.latitude || item.lat;
@@ -219,7 +206,6 @@ const processImagesInBatches = async (elements) => {
                     if (name) {
                         let bestCandidate = { imageUrl: null, images: [], description: null, author: null, license: null };
                         
-                        // 1. Intentos de búsqueda (Wiki, Commons, Mapillary)
                         let wikiData = null;
                         if (lat && lon) wikiData = await getWikipediaData(lat, lon, name);
                         if (!wikiData?.hasData || !wikiData?.imageUrl) {
@@ -233,7 +219,6 @@ const processImagesInBatches = async (elements) => {
                         }
                         
                         if (wikiData?.hasData && !isTransportContext(wikiData.description)) {
-                             // Si wiki tiene imagen, la usamos. Si isInvalidImage dijo true, wikiData.imageUrl ya es null.
                              if (wikiData.imageUrl) {
                                  bestCandidate.imageUrl = wikiData.imageUrl;
                                  bestCandidate.images.push(wikiData.imageUrl);
@@ -259,15 +244,9 @@ const processImagesInBatches = async (elements) => {
                             }
                         }
 
-                        // 🔥 MOMENTO DE LA VERDAD:
-                        // Si después de todo NO encontramos una buena imagen (es null),
-                        // guardamos NULL en la base de datos.
-                        // El Frontend verá NULL y usará la imagen predeterminada.
-                        
-                        // Solo actualizamos si encontramos ALGO (descripción o imagen)
                         if (bestCandidate.imageUrl || bestCandidate.description) {
                             const uniqueImages = [...new Set(bestCandidate.images)];
-                            const postgresArray = uniqueImages.length > 0 ? `{${uniqueImages.map(url => `"${url}"`).join(',')}}` : null; // Guardamos NULL si array vacío
+                            const postgresArray = uniqueImages.length > 0 ? `{${uniqueImages.map(url => `"${url}"`).join(',')}}` : null; 
                             
                             await db.raw(
                                 `UPDATE historical_locations 
@@ -285,13 +264,15 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (STRICT MODE)
+// 🛡️ EL PORTERO (MODO ÉLITE) 🏰
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
+    // ⚔️ LISTA EXTREMADAMENTE ESTRICTA
+    // Eliminado: Others, Historic Site genérico, Memorials, Artwork
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
-        'Plaques', 'Busts', 'Stolperstein', 'Historic Site',
-        'Statues', 'Religious', 'Towers', 'Others'
+        'Stolperstein', 'Religious', 'Towers',
+        'Statues', 'Busts', 'Plaques' // Solo si son explícitas
     ]);
 
     const validRows = [];
@@ -303,36 +284,36 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         if (!name && t['memorial:type'] !== 'stolperstein') continue;
         if (isTransportContext(name)) continue;
 
+        // Filtro de basura rápido
         if (t.railway || t.public_transport || t.highway || t.shop || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
             t.amenity === 'parking' || t.amenity === 'atm' || 
-            t.amenity === 'toilets' || t.amenity === 'post_box' || 
-            t.amenity === 'telephone' || t.amenity === 'bench' || 
-            t.amenity === 'waste_basket' || t.leisure === 'playground' ||
-            t.amenity === 'restaurant' || t.amenity === 'cafe' || t.amenity === 'bar') continue;
+            t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
 
-        let cat = 'Others'; 
+        let cat = null; // Por defecto es NULL (rechazado)
+
+        // 1. CLASIFICACIÓN EXACTA
         if (t.historic === 'ruins') cat = 'Ruins';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         else if (t.tourism === 'museum') cat = 'Museums';
-        else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery') cat = 'Religious';
+        else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery' || t.building === 'cathedral') cat = 'Religious';
         else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) cat = 'Towers';
+        
+        // 2. MONUMENTOS ESPECÍFICOS
         else if (t.historic === 'memorial' || t.tourism === 'artwork') {
             const memType = t['memorial:type'];
+            // SOLO permitimos tipos específicos. Si es genérico, se va.
             if (memType === 'stolperstein') cat = 'Stolperstein';
             else if (memType === 'plaque' || t.historic === 'plaque') cat = 'Plaques';
             else if (memType === 'bust') cat = 'Busts';
             else if (memType === 'statue') cat = 'Statues'; 
             else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
-            else cat = 'Historic Site'; 
         }
-        else if (t.historic) cat = 'Historic Site'; 
 
-        // Filtro extra: Si es artwork/mural y no tenemos claro qué es,
-        // OpenStreetMap a veces mete basura aquí. Solo aceptamos artwork si tiene nombre claro.
-        if (t.tourism === 'artwork' && !t.artwork_type && !name) continue;
+        // Si después de todo esto cat sigue siendo null (ej. un mural, un banco, un sitio histórico genérico),
+        // se ignora y no entra al array.
 
-        if (ALLOWED_CATEGORIES.has(cat)) {
+        if (cat && ALLOWED_CATEGORIES.has(cat)) {
             let finalAddress = locationLabel;
             const city = t['addr:city'] || t['addr:town'];
             const street = t['addr:street'];
@@ -370,7 +351,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 // 🕹️ CONTROLADOR PRINCIPAL
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
-    req.setTimeout(120000); 
+    req.setTimeout(60000); 
 
     const search = req.query.q || req.query.search || "";
     const { category, lat, lon } = req.query; 
@@ -379,6 +360,7 @@ export const getLocalizaciones = async (req, res) => {
     const offset = (page - 1) * limit;
 
     try {
+        // --- QUERY SQL BASE ---
         let selectValues = [], whereValues = [], orderValues = [];
         let selectFields = `
             id, name, category, image_url, images, author, license,
@@ -391,8 +373,10 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
+        
+        // Mantenemos la lógica de filtro
         if (!category || category === 'All') {
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Historic Site', 'Statues', 'Religious', 'Towers', 'Others')`;
+            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers')`;
         } else {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
@@ -403,6 +387,7 @@ export const getLocalizaciones = async (req, res) => {
             whereValues.push(parseFloat(lon), parseFloat(lat));
         }
 
+        // ... resto de filtros (búsqueda, orden) ...
         const searchTerms = getExpandedSearchTerms(search); 
         if (searchTerms.length > 0) {
             const orConditions = [];
@@ -425,27 +410,28 @@ export const getLocalizaciones = async (req, res) => {
         const initialResult = await db.raw(finalQuery, allValues);
         let dataToSend = initialResult.rows;
 
-        // --- DEEP SCAN ---
+        // --- DEEP SCAN ULTRA-OPTIMIZADO ---
         let explorationNeeded = false;
         let bbox = null;
         let areaName = "Explored Area";
 
         if (page === 1) {
-            if (search.length > 3 && dataToSend.length < 15) { 
+            if (search.length > 3 && dataToSend.length < 5) { // Solo si hay MUY pocos resultados
                  const nominatimInfo = await getNominatimData(search);
                  if (nominatimInfo && nominatimInfo.type !== 'country') {
                      const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
                      if (isArea) {
-                         bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 14); 
+                         // ZOOM 15: Buscamos en el barrio, no en la ciudad entera. Mucho más rápido.
+                         bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 15); 
                          areaName = nominatimInfo.displayName;
                          explorationNeeded = true;
                      }
                  }
             } else if (lat && lon && !search) {
-                const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 3000);
-                if (dataToSend.length < 10 || nearbyItems.length < 5) {
+                const nearbyItems = dataToSend.filter(i => i.distance_meters && i.distance_meters < 1000);
+                if (dataToSend.length < 5 || nearbyItems.length < 3) {
                     areaName = await getReverseNominatim(lat, lon);
-                    bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 14);
+                    bbox = getBoundingBox(parseFloat(lat), parseFloat(lon), 15);
                     explorationNeeded = true;
                 }
             }
@@ -453,18 +439,22 @@ export const getLocalizaciones = async (req, res) => {
 
         if (explorationNeeded && bbox) {
             console.log(`🌍 Explorando Overpass (Deep Scan) para: ${areaName}`);
+            // 🔥 LA SOLUCIÓN MÁGICA:
+            // En lugar de pedir "todo lo histórico" (nwr["historic"]), pedimos SOLO lo que nos importa.
+            // Esto reduce la carga de miles de items a unos pocos cientos valiosos.
             const overpassQuery = `
-                [out:json][timeout:60];
+                [out:json][timeout:25];
                 (
-                    nwr["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"~"castle|fortress|palace|ruins|tower|city_gate|church|monastery|wayside_shrine"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["building"="cathedral"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="artwork"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["memorial:type"="stolperstein"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
                 out center;
             `;
 
-            const elements = await fetchOverpassData(overpassQuery, 250000); 
+            const elements = await fetchOverpassData(overpassQuery, 150000); 
             if (elements.length > 0) {
                 await insertElementsToDB(elements, areaName);
                 const finalResult = await db.raw(finalQuery, allValues);
@@ -475,7 +465,6 @@ export const getLocalizaciones = async (req, res) => {
         console.log(`⚡ Enviando ${dataToSend.length} resultados al usuario.`);
         res.json({ page, limit, data: dataToSend });
 
-        // Solo buscamos fotos si NO tienen
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
             processImagesInBatches(itemsSinFoto).catch(err => console.error(err));
@@ -486,7 +475,7 @@ export const getLocalizaciones = async (req, res) => {
         if (!res.headersSent) res.status(500).json({ error: "Server Error" });
     }
 };
-
+// ... (exportar las otras funciones getLocationDescription y getProxyImage igual que antes) ...
 export const getLocationDescription = async (req, res) => {
     const { id } = req.params;
     try {
