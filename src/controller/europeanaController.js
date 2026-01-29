@@ -10,7 +10,7 @@ import {
 } from '../services/externalApis.js'; 
 
 // ==========================================
-// 🧹 HELPERS Y FILTROS (Mantenemos la limpieza)
+// 🧹 HELPERS Y FILTROS
 // ==========================================
 const cleanWikiText = (html) => {
     if (!html) return null;
@@ -28,6 +28,7 @@ const areNamesSimilar = (name1, name2) => {
     return matches.length >= 1; 
 };
 
+// 🔥 FILTRO ANTI-FOTOS MALAS (Mantenemos esto firme)
 const isInvalidImage = (url, title = '') => {
     if (!url) return true;
     const lowerUrl = url.toLowerCase();
@@ -56,6 +57,7 @@ const isInvalidContext = (text, categories = '') => {
         'shrine', 'stolperstein', 'chapel', 'monastery', 'abbey', 'basilica', 
         'landmark', 'history', 'tourist', 'viewpoint', 'attraction'
     ];
+    // Palabras basura
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
         'interior of', 'furniture', 'poster', 'advertisement', 'logo', 'icon',
@@ -98,7 +100,7 @@ async function getWikipediaData(lat, lon, targetName) {
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
             action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, ggsradius: '80', ggslimit: '1', 
+            ggscoord: `${lat}|${lon}`, ggsradius: '100', ggslimit: '1', 
             prop: 'extracts|pageimages', exintro: '1', explaintext: '1', pithumbsize: '600'
         });
         const response = await axios.get(`${baseUrl}?${params.toString()}`, { headers: { 'User-Agent': 'CastleApp/1.0' }, timeout: 3000 });
@@ -259,13 +261,15 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (Insertar)
+// 🛡️ EL PORTERO (EQUILIBRADO) 🔓
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
+    // ✅ VOLVEMOS A ACEPTAR "Historic Site", "Monuments" y "Tourist" (pero controlados)
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Stolperstein', 'Religious', 'Towers',
-        'Statues', 'Busts', 'Plaques'
+        'Statues', 'Busts', 'Plaques',
+        'Historic Site', 'Monuments', 'Tourist' // 👈 VUELVEN A ENTRAR
     ]);
 
     const validRows = [];
@@ -277,17 +281,21 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         if (!name && t['memorial:type'] !== 'stolperstein') continue;
         if (isTransportContext(name)) continue;
 
+        // Filtro de basura rápido
         if (t.railway || t.public_transport || t.highway || t.shop || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
-            t.amenity === 'parking' || t.amenity === 'atm') continue;
+            t.amenity === 'parking' || t.amenity === 'atm' || 
+            t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
 
-        let cat = null; 
+        let cat = 'Historic Site'; // Por defecto, si es histórico, entra aquí
 
+        // 1. CLASIFICACIÓN
         if (t.historic === 'ruins') cat = 'Ruins';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         else if (t.tourism === 'museum') cat = 'Museums';
         else if (t.amenity === 'place_of_worship' || t.amenity === 'monastery' || t.historic === 'church' || t.historic === 'monastery' || t.building === 'cathedral') cat = 'Religious';
         else if (['tower', 'city_gate', 'fountain', 'bridge', 'aqueduct'].includes(t.historic)) cat = 'Towers';
+        else if (t.tourism === 'viewpoint' || t.tourism === 'attraction') cat = 'Tourist';
         
         else if (t.historic === 'memorial' || t.tourism === 'artwork') {
             const memType = t['memorial:type'];
@@ -296,7 +304,12 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
             else if (memType === 'bust') cat = 'Busts';
             else if (memType === 'statue') cat = 'Statues'; 
             else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
+            else cat = 'Monuments'; // El resto de memoriales van a monumentos
         }
+
+        // 2. FILTRO DE BASURA VISUAL (Murales/Graffitis feos)
+        // Si es "artwork" pero no tiene un nombre propio fuerte o parece genérico, lo evitamos
+        if (t.tourism === 'artwork' && !t.artwork_type && (!name || name.toLowerCase().includes('mural'))) continue;
 
         if (cat && ALLOWED_CATEGORIES.has(cat)) {
             let finalAddress = locationLabel;
@@ -333,10 +346,9 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// 🕹️ CONTROLADOR PRINCIPAL (CON TIMEOUT SEGURO)
+// 🕹️ CONTROLADOR PRINCIPAL (TIMEOUT + DEEP SCAN AMPLIADO)
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
-    // Timeout del servidor express
     req.setTimeout(30000); 
 
     const search = req.query.q || req.query.search || "";
@@ -345,7 +357,6 @@ export const getLocalizaciones = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
 
-    // Función auxiliar para obtener datos de la DB
     const fetchFromDB = async () => {
         let selectValues = [], whereValues = [], orderValues = [];
         let selectFields = `
@@ -360,7 +371,8 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         if (!category || category === 'All') {
-            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers')`;
+            // 🔥 AHORA INCLUIMOS TODO DE NUEVO
+            baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers', 'Historic Site', 'Monuments', 'Tourist')`;
         } else {
             baseWhere += ` AND category = ?`;
             whereValues.push(category);
@@ -394,10 +406,8 @@ export const getLocalizaciones = async (req, res) => {
     };
 
     try {
-        // 1. Obtenemos datos iniciales
         let dataToSend = await fetchFromDB();
 
-        // 2. Lógica de Deep Scan (Exploración)
         let explorationNeeded = false;
         let bbox = null;
         let areaName = "Explored Area";
@@ -408,7 +418,6 @@ export const getLocalizaciones = async (req, res) => {
                  if (nominatimInfo && nominatimInfo.type !== 'country') {
                      const isArea = ['city','administrative','county','town'].includes(nominatimInfo.type);
                      if (isArea) {
-                         // Zoom 15 = Barrio, no ciudad entera.
                          bbox = nominatimInfo.bbox || getBoundingBox(nominatimInfo.lat, nominatimInfo.lon, 15); 
                          areaName = nominatimInfo.displayName;
                          explorationNeeded = true;
@@ -425,38 +434,38 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         if (explorationNeeded && bbox) {
-            console.log(`🌍 Intentando Deep Scan en ${areaName} (Max 8 segs)...`);
+            console.log(`🌍 Intentando Deep Scan en ${areaName}...`);
             
-            // 🔥 QUERY OVERPASS ULTRA-ESPECÍFICA (Solo lo VIP)
+            // 🔥 QUERY OVERPASS EQUILIBRADA
+            // Traemos todo lo histórico, pero limitamos la zona (Zoom 15) para no saturar
             const overpassQuery = `
-                [out:json][timeout:8];
+                [out:json][timeout:10];
                 (
-                    nwr["historic"~"castle|fortress|palace|ruins|tower|city_gate"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                     nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["building"="cathedral"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["tourism"="viewpoint"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["tourism"="attraction"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
                 out center;
             `;
 
             try {
-                // ⏱️ TIMEOUT MANUAL: Si fetchOverpassData tarda > 8s, lo cancelamos
-                const fetchPromise = fetchOverpassData(overpassQuery, 100000);
+                const fetchPromise = fetchOverpassData(overpassQuery, 150000);
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 8000));
 
                 const elements = await Promise.race([fetchPromise, timeoutPromise]);
 
                 if (elements && elements.length > 0) {
-                    console.log(`✅ Overpass encontró ${elements.length} lugares. Insertando...`);
+                    console.log(`✅ Overpass encontró ${elements.length} lugares.`);
                     await insertElementsToDB(elements, areaName);
-                    // Refrescamos datos de la DB
                     dataToSend = await fetchFromDB();
                 }
             } catch (err) {
                 if (err.message === 'TIMEOUT_OVERPASS') {
-                    console.log("⏩ Deep Scan tardó demasiado. Saltando y enviando datos locales.");
+                    console.log("⏩ Timeout: Enviando lo que hay.");
                 } else {
-                    console.error("⚠️ Error en Deep Scan:", err.message);
+                    console.error("⚠️ Error en Scan:", err.message);
                 }
             }
         }
@@ -464,7 +473,6 @@ export const getLocalizaciones = async (req, res) => {
         console.log(`⚡ Enviando ${dataToSend.length} resultados.`);
         res.json({ page, limit, data: dataToSend });
 
-        // Background jobs
         const itemsSinFoto = dataToSend.filter(item => !item.images || item.images.length === 0);
         if (itemsSinFoto.length > 0) {
             processImagesInBatches(itemsSinFoto).catch(err => console.error(err));
