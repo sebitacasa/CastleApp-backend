@@ -1,98 +1,77 @@
 import axios from 'axios';
 
-// 🔑 ASEGÚRATE DE QUE ESTA CLAVE SEA VÁLIDA Y TENGA "PLACES API (NEW)" HABILITADA
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'PON_TU_API_KEY_AQUI'; 
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'TU_API_KEY_AQUI'; 
 
 export const getGoogleLocations = async (req, res) => {
-    // 1. Recibimos parámetros: pueden ser coordenadas O texto
     const { lat, lon, q, search } = req.query;
     const textQuery = q || search;
 
-    // Validación básica: Necesitamos ALGO (coordenadas o texto)
+    // Validación: Necesitamos algo para trabajar
     if ((!lat || !lon) && !textQuery) {
-        return res.status(400).json({ error: 'Faltan coordenadas (lat/lon) o búsqueda (q)' });
+        return res.status(400).json({ error: 'Faltan datos de ubicación' });
     }
 
     try {
-        let url = '';
-        let requestBody = {};
+        // 🔥 CAMBIO DE ESTRATEGIA: USAMOS SIEMPRE "SEARCH TEXT" (Es más inteligente)
+        const url = 'https://places.googleapis.com/v1/places:searchText';
+        
+        let requestBody = {
+            maxResultCount: 20,
+            // Pedimos explícitamente "Mejores atracciones", Google entiende esto mejor que categorías sueltas
+            textQuery: "Top tourist attractions, historical sites, and museums", 
+        };
 
-        // 2. Definimos qué tipos de lugares queremos (Filtro VIP)
-        const includedTypes = [
-            'museum', 'tourist_attraction', 'historical_landmark', 
-            'church', 'place_of_worship', 'castle', 'art_gallery',
-            'monument'
-        ];
-
-        // 3. ESTRATEGIA A: BÚSQUEDA POR RADAR (Tengo coordenadas)
-        if (lat && lon) {
-            url = 'https://places.googleapis.com/v1/places:searchNearby';
-            requestBody = {
-                includedTypes: includedTypes,
-                maxResultCount: 20,
-                locationRestriction: {
-                    circle: {
-                        center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
-                        radius: 2500.0 // 2.5 km a la redonda
-                    }
-                }
-            };
+        if (textQuery) {
+            // CASO 1: Búsqueda por Ciudad (Ej: "Viena")
+            console.log(`🔎 Buscando ciudad: ${textQuery}`);
+            requestBody.textQuery = `Tourist attractions in ${textQuery}`;
         } 
-        // 4. ESTRATEGIA B: BÚSQUEDA POR TEXTO (Tengo nombre de ciudad)
-        else if (textQuery) {
-            url = 'https://places.googleapis.com/v1/places:searchText';
-            // Truco: Le pedimos "Tourist attractions in [Ciudad]" para que traiga lista, no solo el centro
-            const smartQuery = `Tourist attractions in ${textQuery}`;
-            
-            requestBody = {
-                textQuery: smartQuery,
-                maxResultCount: 20,
+        else if (lat && lon) {
+            // CASO 2: GPS (Tu ubicación)
+            // Le damos un "Sesgo" (Bias) hacia tu ubicación, pero permitimos que busque un poco más lejos si es necesario
+            console.log(`📍 Buscando alrededor de: ${lat}, ${lon}`);
+            requestBody.locationBias = {
+                circle: {
+                    center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
+                    radius: 15000.0 // 15 km de radio (Cubre Valentín Alsina -> Palermo/Centro)
+                }
             };
         }
 
-        // 5. Configuración de Headers (FieldMask ahorra dinero)
         const headers = {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            // Solo pedimos lo necesario: ID, Nombre, Dirección, Ubicación, Fotos, Resumen
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary,places.types'
         };
 
-        // 6. Hacemos la llamada a Google
         const response = await axios.post(url, requestBody, { headers });
         const googlePlaces = response.data.places || [];
 
-        // 7. Limpiamos y formateamos los datos para tu App
+        // Mapeo limpio para tu App
         const cleanData = googlePlaces.map(place => {
-            // Construir URL de la foto si existe
             let imageUrl = null;
             if (place.photos && place.photos.length > 0) {
-                const photoReference = place.photos[0].name; 
-                // URL directa a la imagen
+                const photoReference = place.photos[0].name;
                 imageUrl = `https://places.googleapis.com/v1/${photoReference}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`;
             }
 
             return {
                 id: place.id,
                 name: place.displayName?.text,
-                category: 'Tourist', // Google no da categoría fácil, ponemos genérica o analizamos 'types'
-                description: place.editorialSummary?.text || place.formattedAddress || "Popular location.",
-                country: place.formattedAddress, // Usamos la dirección como subtítulo
+                category: 'Tourist', // Podrías mejorar esto leyendo place.types si quieres
+                description: place.editorialSummary?.text || place.formattedAddress || "Discover this amazing location.",
+                country: place.formattedAddress, 
                 image_url: imageUrl,
                 latitude: place.location?.latitude,
                 longitude: place.location?.longitude
             };
         });
 
-        console.log(`✅ Google encontró ${cleanData.length} lugares para: ${textQuery || (lat+','+lon)}`);
-        
-        // 8. Enviamos la respuesta
+        console.log(`✅ Resultados enviados: ${cleanData.length}`);
         res.json({ data: cleanData });
 
     } catch (error) {
-        // Mejor manejo de errores para ver qué dice Google
         console.error("🔥 Error Google API:", error.response?.data || error.message);
-        const googleError = error.response?.data?.error?.message || 'Error consultando Google API';
-        res.status(500).json({ error: googleError });
+        res.status(500).json({ error: 'Error al conectar con Google Maps' });
     }
 };
