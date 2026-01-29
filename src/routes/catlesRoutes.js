@@ -24,7 +24,7 @@ router.get('/nuke-db', async (req, res) => {
     }
 });
 
-import { getGoogleLocations } from '../controllers/googleLocationController.js';
+
 
 // router.get('/locations', getLocalizaciones); // <-- El viejo (OpenStreetMap)
 router.get('/localizaciones', getGoogleLocations); // <-- El nuevo (Google)
