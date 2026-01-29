@@ -10,7 +10,7 @@ import {
 } from '../services/externalApis.js'; 
 
 // ==========================================
-// 🧹 HELPERS Y FILTROS
+// 🧹 HELPERS DE LIMPIEZA
 // ==========================================
 const cleanWikiText = (html) => {
     if (!html) return null;
@@ -28,7 +28,7 @@ const areNamesSimilar = (name1, name2) => {
     return matches.length >= 1; 
 };
 
-// 🔥 FILTRO ANTI-FOTOS MALAS (Mantenemos esto firme)
+// 🔥 MANTENEMOS EL FILTRO DE FOTOS MALAS (Esto estaba bien)
 const isInvalidImage = (url, title = '') => {
     if (!url) return true;
     const lowerUrl = url.toLowerCase();
@@ -40,34 +40,31 @@ const isInvalidImage = (url, title = '') => {
         'interior', 'room', 'furniture', 'chair', 'table', 'shelf',
         'book', 'paper', 'document', 'scan', 'page', 'postcard', 'album', 'photo_album',
         'collection', 'archive', 'ephemera', 'pile', 'stack', 'box', 'letters',
-        'signature', 'stamp', 'currency', 'coin'
+        'signature', 'stamp', 'currency', 'coin', 'portrait', 'headshot'
     ];
     if (badKeywords.some(k => lowerUrl.includes(k) || lowerTitle.includes(k))) return true;
     return false;
 };
 
+// 🔓 RELAJAMOS EL FILTRO DE TEXTO
+// Ya no borramos si habla de una persona, porque muchos edificios llevan nombres de personas.
 const isInvalidContext = (text, categories = '') => {
     if (!text && !categories) return false;
     const lowerText = (text + ' ' + categories).toLowerCase();
-    const placeKeywords = [
-        'located', 'situated', 'building', 'monument', 'statue', 'museum', 'castle', 
-        'park', 'plaza', 'square', 'church', 'cathedral', 'ruins', 'house', 'tomb', 
-        'grave', 'memorial', 'bridge', 'theater', 'tower', 'palace', 'fortress', 
-        'mansion', 'site', 'opened', 'founded', 'built', 'archaeological', 'temple', 
-        'shrine', 'stolperstein', 'chapel', 'monastery', 'abbey', 'basilica', 
-        'landmark', 'history', 'tourist', 'viewpoint', 'attraction'
-    ];
-    // Palabras basura
+    
+    // Basura real que queremos evitar
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
-        'interior of', 'furniture', 'poster', 'advertisement', 'logo', 'icon',
-        'flag', 'coat of arms', 'signature', 'document', 'pdf', 'book cover',
-        'panties', 'boxer', 'shorts', 'swimwear', 'stain', 'microscope',
-        'insect', 'animal', 'plant', 'flower', 'fungi', 'textile', 'fabric',
-        'biography', 'born', 'died'
+        'furniture', 'poster', 'advertisement', 'logo', 'icon',
+        'coat of arms', 'signature', 'document', 'pdf', 'book cover',
+        'panties', 'boxer', 'shorts', 'swimwear', 'microscope',
+        'insect', 'animal', 'plant', 'flower', 'fungi', 'textile'
     ];
+    
     if (trashKeywords.some(w => lowerText.includes(w))) return true;
-    if (!placeKeywords.some(w => lowerText.includes(w)) && lowerText.length < 50) return true; 
+    // Solo si es MUY corto y no dice nada útil lo borramos
+    if (lowerText.length < 40) return true; 
+    
     return false;
 };
 
@@ -225,20 +222,12 @@ const processImagesInBatches = async (elements) => {
 
                         if (bestCandidate.images.length === 0) {
                             const gallery = await getCommonsImages(name);
-                            if (gallery.length > 0) {
-                                bestCandidate.imageUrl = gallery[0].url; 
-                                bestCandidate.author = gallery[0].author;
-                                bestCandidate.license = gallery[0].license;
-                                bestCandidate.images = gallery.map(g => g.url);
-                            }
+                            if (gallery.length > 0) bestCandidate.imageUrl = gallery[0].url; 
                         }
 
                         if (bestCandidate.images.length === 0 && lat && lon) {
                             const streetPhoto = await getMapillaryImage(lat, lon);
-                            if (streetPhoto) {
-                                bestCandidate.imageUrl = streetPhoto;
-                                bestCandidate.images.push(streetPhoto);
-                            }
+                            if (streetPhoto) bestCandidate.imageUrl = streetPhoto;
                         }
 
                         if (bestCandidate.imageUrl || bestCandidate.description) {
@@ -261,15 +250,15 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (EQUILIBRADO) 🔓
+// 🛡️ EL PORTERO (AMPLIADO OTRA VEZ) 🌟
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // ✅ VOLVEMOS A ACEPTAR "Historic Site", "Monuments" y "Tourist" (pero controlados)
+    // 🔙 RESTAURAMOS LAS CATEGORÍAS GENERALES
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Stolperstein', 'Religious', 'Towers',
-        'Statues', 'Busts', 'Plaques',
-        'Historic Site', 'Monuments', 'Tourist' // 👈 VUELVEN A ENTRAR
+        'Statues', 'Busts', 'Plaques', 
+        'Historic Site', 'Tourist', 'Monuments' // ✅ Vuelven a entrar
     ]);
 
     const validRows = [];
@@ -287,7 +276,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
             t.amenity === 'parking' || t.amenity === 'atm' || 
             t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
 
-        let cat = 'Historic Site'; // Por defecto, si es histórico, entra aquí
+        let cat = 'Historic Site'; // Valor por defecto para cosas históricas
 
         // 1. CLASIFICACIÓN
         if (t.historic === 'ruins') cat = 'Ruins';
@@ -304,12 +293,8 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
             else if (memType === 'bust') cat = 'Busts';
             else if (memType === 'statue') cat = 'Statues'; 
             else if (t.historic === 'wayside_shrine') cat = 'Religious'; 
-            else cat = 'Monuments'; // El resto de memoriales van a monumentos
+            else cat = 'Monuments'; 
         }
-
-        // 2. FILTRO DE BASURA VISUAL (Murales/Graffitis feos)
-        // Si es "artwork" pero no tiene un nombre propio fuerte o parece genérico, lo evitamos
-        if (t.tourism === 'artwork' && !t.artwork_type && (!name || name.toLowerCase().includes('mural'))) continue;
 
         if (cat && ALLOWED_CATEGORIES.has(cat)) {
             let finalAddress = locationLabel;
@@ -346,7 +331,7 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
 }
 
 // ==========================================
-// 🕹️ CONTROLADOR PRINCIPAL (TIMEOUT + DEEP SCAN AMPLIADO)
+// 🕹️ CONTROLADOR PRINCIPAL
 // ==========================================
 export const getLocalizaciones = async (req, res) => {
     req.setTimeout(30000); 
@@ -371,7 +356,6 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         if (!category || category === 'All') {
-            // 🔥 AHORA INCLUIMOS TODO DE NUEVO
             baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers', 'Historic Site', 'Monuments', 'Tourist')`;
         } else {
             baseWhere += ` AND category = ?`;
@@ -434,26 +418,25 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         if (explorationNeeded && bbox) {
-            console.log(`🌍 Intentando Deep Scan en ${areaName}...`);
+            console.log(`🌍 Deep Scan (Broad) en ${areaName}...`);
             
-            // 🔥 QUERY OVERPASS EQUILIBRADA
-            // Traemos todo lo histórico, pero limitamos la zona (Zoom 15) para no saturar
+            // 🔥 QUERY AMPLIA OTRA VEZ:
+            // Volvemos a pedir 'historic' y 'tourism' genéricos para captar todo lo que nos perdimos.
             const overpassQuery = `
-                [out:json][timeout:10];
+                [out:json][timeout:15];
                 (
                     nwr["historic"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="museum"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="viewpoint"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-                    nwr["tourism"="attraction"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["tourism"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                    nwr["landmark"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
                 );
                 (._; >;);
                 out center;
             `;
 
             try {
-                const fetchPromise = fetchOverpassData(overpassQuery, 150000);
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 8000));
-
+                // Timeout de seguridad de 10 segundos
+                const fetchPromise = fetchOverpassData(overpassQuery, 250000);
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 10000));
                 const elements = await Promise.race([fetchPromise, timeoutPromise]);
 
                 if (elements && elements.length > 0) {
@@ -462,11 +445,7 @@ export const getLocalizaciones = async (req, res) => {
                     dataToSend = await fetchFromDB();
                 }
             } catch (err) {
-                if (err.message === 'TIMEOUT_OVERPASS') {
-                    console.log("⏩ Timeout: Enviando lo que hay.");
-                } else {
-                    console.error("⚠️ Error en Scan:", err.message);
-                }
+                console.log("⏩ Timeout de exploración.");
             }
         }
 
