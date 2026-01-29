@@ -99,12 +99,9 @@ export const getGoogleLocations = async (req, res) => {
         let requestBody = { textQuery: finalQuery, maxResultCount: 20 };
 
         if (lat && lon && !textQuery) {
-            console.log(`📍 Buscando GPS: "${finalQuery}" cerca de ${lat},${lon}`);
             requestBody.locationBias = {
                 circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: 15000.0 }
             };
-        } else {
-            console.log(`🔎 Buscando ciudad: "${finalQuery}"`);
         }
 
         const headers = {
@@ -123,15 +120,13 @@ export const getGoogleLocations = async (req, res) => {
 
             let finalDescription = place.editorialSummary?.text || place.formattedAddress || "Discovered via Google.";
             let finalImage = null;
-            let wikiTitle = null; // Variable para guardar el título de Wiki
+            let wikiTitle = null;
 
-            // Foto Google
             if (place.photos && place.photos.length > 0) {
                 const photoReference = place.photos[0].name;
                 finalImage = `https://places.googleapis.com/v1/${photoReference}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`;
             }
 
-            // Enriquecer con Wikipedia (Resumen)
             if (pLat && pLon) {
                 const wikiData = await getWikipediaSummary(pLat, pLon, pName);
                 if (wikiData) {
@@ -141,8 +136,17 @@ export const getGoogleLocations = async (req, res) => {
                     if (!finalImage && wikiData.imageUrl) {
                         finalImage = wikiData.imageUrl;
                     }
-                    wikiTitle = wikiData.title; // 👈 Guardamos el título para usarlo en "Read More"
+                    wikiTitle = wikiData.title;
                 }
+            }
+
+            // 🔥 PERSISTENCIA EN DB: 
+            // Si tenemos wikiTitle, intentamos actualizar el registro en la DB
+            if (wikiTitle) {
+                db('historical_locations')
+                    .where('name', pName)
+                    .update({ wiki_title: wikiTitle })
+                    .catch(err => console.log(`Nota: No se pudo actualizar wiki_title para ${pName} (posiblemente no está en la DB todavía)`));
             }
 
             return {
@@ -154,11 +158,10 @@ export const getGoogleLocations = async (req, res) => {
                 image_url: finalImage,
                 latitude: pLat,
                 longitude: pLon,
-                wiki_title: wikiTitle // 👈 Enviamos esto al Frontend
+                wiki_title: wikiTitle 
             };
         }));
 
-        console.log(`✅ Enviando ${enrichedData.length} resultados.`);
         res.json({ data: enrichedData });
 
     } catch (error) {
