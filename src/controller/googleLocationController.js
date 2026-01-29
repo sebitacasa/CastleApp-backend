@@ -171,25 +171,30 @@ export const getGoogleLocations = async (req, res) => {
 // 📖 NUEVO ENDPOINT: READ MORE (Detalle Completo)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
-    const { title } = req.query; // El frontend nos envía el "wiki_title"
+    const { title } = req.query;
 
-    if (!title) return res.status(400).json({ error: 'Falta el título de Wikipedia' });
+    if (!title) return res.status(400).json({ error: 'Faltan parámetros' });
 
     try {
-        console.log(`📚 Buscando detalle completo para: ${title}`);
         const baseUrl = 'https://en.wikipedia.org/w/api.php';
         const params = new URLSearchParams({
-            action: 'query', format: 'json',
+            action: 'query',
+            format: 'json',
             prop: 'extracts',
-            titles: title, // Buscamos directamente por título exacto
-            explaintext: '1', 
-            // ❌ NO usamos 'exintro', así viene todo el texto
+            titles: title,
+            explaintext: '1',
+            origin: '*' // 👈 Agregamos esto para evitar problemas de CORS
         });
 
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, { timeout: 5000 });
+        const response = await axios.get(`${baseUrl}?${params.toString()}`, {
+            headers: { 'User-Agent': 'CastleApp/1.0 (https://tu-web-o-email.com)' }, // 👈 User-Agent real
+            timeout: 5000 
+        });
+
         const pages = response.data?.query?.pages;
-        
-        if (!pages) return res.status(404).json({ error: 'No encontrado' });
+        if (!pages || pages["-1"]) { // 👈 "-1" significa que Wikipedia no encontró el título
+            return res.status(404).json({ error: 'Artículo no encontrado en Wikipedia' });
+        }
 
         const pageId = Object.keys(pages)[0];
         const fullText = pages[pageId].extract;
@@ -197,7 +202,7 @@ export const getWikiFullDetails = async (req, res) => {
         res.json({ full_description: fullText });
 
     } catch (error) {
-        console.error("Error Wiki Full:", error.message);
-        res.status(500).json({ error: 'Error obteniendo detalle completo' });
+        console.error("🔥 Error detallado:", error.response?.data || error.message);
+        res.status(500).json({ error: 'Error al conectar con Wikipedia' });
     }
 };
