@@ -47,39 +47,29 @@ const isTransportContext = (text) => {
 // ==========================================
 // 📚 WIKIPEDIA HELPER (SOLO RESUMEN)
 // ==========================================
-async function getWikipediaSummary(lat, lon, googleName) {
+const getWikipediaSummary = async (lat, lon, name) => {
     try {
-        const baseUrl = 'https://en.wikipedia.org/w/api.php';
-        const params = new URLSearchParams({
-            action: 'query', format: 'json', generator: 'geosearch',
-            ggscoord: `${lat}|${lon}`, 
-            ggsradius: '150', // Radio corto
-            ggslimit: '1',
-            prop: 'extracts|pageimages', 
-            exintro: '1', // 👈 CLAVE: Solo traemos la introducción para la lista
-            explaintext: '1', 
-            pithumbsize: '600'
+        // 1. Buscamos por coordenadas para obtener el título exacto
+        const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
+        
+        const searchRes = await axios.get(searchUrl, {
+            headers: { 'User-Agent': 'CastleApp/1.0' } // 👈 Vital para evitar el Error 500
         });
 
-        const response = await axios.get(`${baseUrl}?${params.toString()}`, { timeout: 3500 });
-        const pages = response.data?.query?.pages;
-        if (!pages) return null;
-
-        const pageId = Object.keys(pages)[0];
-        const pageData = pages[pageId];
-        const description = pageData.extract || "";
-
-        if (googleName && !areNamesSimilar(pageData.title, googleName)) return null;
-        if (isInvalidContext(description) || isTransportContext(description)) return null;
-
-        return {
-            title: pageData.title, // 👈 Guardamos el Título Exacto de Wiki
-            description: description,
-            imageUrl: pageData.thumbnail?.source || null,
-            source: 'Wikipedia'
-        };
-    } catch (e) { return null; }
-}
+        const geoResult = searchRes.data.query?.geosearch[0];
+        
+        if (geoResult) {
+            return {
+                title: geoResult.title,
+                // Puedes agregar más campos si los necesitas
+            };
+        }
+        return null;
+    } catch (error) {
+        console.error("Error en Wiki Search:", error.message);
+        return null;
+    }
+};
 
 // ==========================================
 // 🚀 CONTROLADOR PRINCIPAL (LISTA)
