@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getLocalizaciones, getProxyImage, getLocationDescription } from '../controller/europeanaController.js'; // Importamos el controlador
 import db from '../config/db.js';
-import { getGoogleLocations } from '../controller/googleLocationController.js';
+import { getGoogleLocations, getWikiFullDetails } from '../controller/googleLocationController.js';
 const router = Router();
 
 // Vinculamos la URL con la función del controlador
@@ -13,6 +13,8 @@ router.get('/image-proxy', getProxyImage);
 
 // Agrega esto donde defines tus rutas
 router.get('/localizaciones/:id/description', getLocationDescription);
+
+router.get('/wiki-details', getWikiFullDetails);
 
 router.get('/nuke-db', async (req, res) => {
     try {
