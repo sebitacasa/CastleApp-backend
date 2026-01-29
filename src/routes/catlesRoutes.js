@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { getLocalizaciones, getProxyImage, getLocationDescription } from '../controller/europeanaController.js'; // Importamos el controlador
 import db from '../config/db.js';
+import { getGoogleLocations } from '../controller/googleLocationController.js';
 const router = Router();
 
 // Vinculamos la URL con la función del controlador
-router.get('/localizaciones', getLocalizaciones);
+//router.get('/localizaciones', getLocalizaciones);
 
 router.get('/image-proxy', getProxyImage);
 // Si tenés la de "cercanas", podés hacer otro controlador para esa:
@@ -22,4 +23,9 @@ router.get('/nuke-db', async (req, res) => {
         res.status(500).send('Error: ' + e.message);
     }
 });
+
+import { getGoogleLocations } from '../controllers/googleLocationController.js';
+
+// router.get('/locations', getLocalizaciones); // <-- El viejo (OpenStreetMap)
+router.get('/localizaciones', getGoogleLocations); // <-- El nuevo (Google)
 export default router;
