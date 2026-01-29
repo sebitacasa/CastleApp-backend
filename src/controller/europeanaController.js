@@ -28,7 +28,7 @@ const areNamesSimilar = (name1, name2) => {
     return matches.length >= 1; 
 };
 
-// 🔥 MANTENEMOS EL FILTRO DE FOTOS MALAS (Esto estaba bien)
+// 🔥 MANTENEMOS EL FILTRO DE FOTOS MALAS (Esto funciona bien)
 const isInvalidImage = (url, title = '') => {
     if (!url) return true;
     const lowerUrl = url.toLowerCase();
@@ -47,12 +47,12 @@ const isInvalidImage = (url, title = '') => {
 };
 
 // 🔓 RELAJAMOS EL FILTRO DE TEXTO
-// Ya no borramos si habla de una persona, porque muchos edificios llevan nombres de personas.
+// Ya no borramos si habla de una persona. Aceptamos biografías si el lugar es válido.
 const isInvalidContext = (text, categories = '') => {
     if (!text && !categories) return false;
     const lowerText = (text + ' ' + categories).toLowerCase();
     
-    // Basura real que queremos evitar
+    // Solo borramos basura real, no biografías
     const trashKeywords = [
         'clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of',
         'furniture', 'poster', 'advertisement', 'logo', 'icon',
@@ -250,15 +250,15 @@ const processImagesInBatches = async (elements) => {
 };
 
 // ==========================================
-// 🛡️ EL PORTERO (AMPLIADO OTRA VEZ) 🌟
+// 🛡️ EL PORTERO (VUELVEN TODOS) 🌟
 // ==========================================
 async function insertElementsToDB(elements, locationLabel = 'Unknown') {
-    // 🔙 RESTAURAMOS LAS CATEGORÍAS GENERALES
+    // ✅ CATEGORÍAS RESTAURADAS
     const ALLOWED_CATEGORIES = new Set([
         'Castles', 'Ruins', 'Museums', 
         'Stolperstein', 'Religious', 'Towers',
         'Statues', 'Busts', 'Plaques', 
-        'Historic Site', 'Tourist', 'Monuments' // ✅ Vuelven a entrar
+        'Historic Site', 'Tourist', 'Monuments' 
     ]);
 
     const validRows = [];
@@ -270,15 +270,14 @@ async function insertElementsToDB(elements, locationLabel = 'Unknown') {
         if (!name && t['memorial:type'] !== 'stolperstein') continue;
         if (isTransportContext(name)) continue;
 
-        // Filtro de basura rápido
         if (t.railway || t.public_transport || t.highway || t.shop || 
             t.amenity === 'bus_station' || t.amenity === 'taxi' || 
             t.amenity === 'parking' || t.amenity === 'atm' || 
             t.amenity === 'restaurant' || t.amenity === 'cafe') continue;
 
-        let cat = 'Historic Site'; // Valor por defecto para cosas históricas
+        let cat = 'Historic Site'; // Por defecto, si es histórico, entra
 
-        // 1. CLASIFICACIÓN
+        // CLASIFICACIÓN
         if (t.historic === 'ruins') cat = 'Ruins';
         else if (['castle', 'fortress', 'citywalls', 'manor', 'palace', 'fort'].includes(t.historic)) cat = 'Castles';
         else if (t.tourism === 'museum') cat = 'Museums';
@@ -356,6 +355,7 @@ export const getLocalizaciones = async (req, res) => {
 
         let baseWhere = `FROM historical_locations WHERE 1=1`;
         if (!category || category === 'All') {
+            // 🔥 INCLUIMOS TODO DE NUEVO
             baseWhere += ` AND category IN ('Castles', 'Ruins', 'Museums', 'Plaques', 'Busts', 'Stolperstein', 'Statues', 'Religious', 'Towers', 'Historic Site', 'Monuments', 'Tourist')`;
         } else {
             baseWhere += ` AND category = ?`;
@@ -418,10 +418,9 @@ export const getLocalizaciones = async (req, res) => {
         }
 
         if (explorationNeeded && bbox) {
-            console.log(`🌍 Deep Scan (Broad) en ${areaName}...`);
+            console.log(`🌍 Deep Scan (Amplio) en ${areaName}...`);
             
-            // 🔥 QUERY AMPLIA OTRA VEZ:
-            // Volvemos a pedir 'historic' y 'tourism' genéricos para captar todo lo que nos perdimos.
+            // 🔥 QUERY AMPLIA: Recuperamos Historic y Tourism
             const overpassQuery = `
                 [out:json][timeout:15];
                 (
@@ -434,7 +433,6 @@ export const getLocalizaciones = async (req, res) => {
             `;
 
             try {
-                // Timeout de seguridad de 10 segundos
                 const fetchPromise = fetchOverpassData(overpassQuery, 250000);
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT_OVERPASS')), 10000));
                 const elements = await Promise.race([fetchPromise, timeoutPromise]);
