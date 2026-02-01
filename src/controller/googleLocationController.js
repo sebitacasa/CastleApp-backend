@@ -1,11 +1,10 @@
 import axios from 'axios';
-
-// Nota: Este controlador maneja búsquedas EXPLICITAS del usuario (ej: "Castillos en España").
-// No toca la base de datos local. Sirve para la pantalla "SearchScreen".
+// 👇 Importamos la conexión Knex (Asegúrate que la ruta sea correcta)
+import db from '../config/db.js'; 
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-// 🏰 Categorías para enriquecer la búsqueda
+// 🏰 Categorías para enriquecer la búsqueda de texto
 const CATEGORY_QUERIES = {
     'All': "Top tourist attractions, historical sites, museums, and castles",
     'Castles': "Castles, palaces, fortresses, and citadels",
@@ -13,51 +12,31 @@ const CATEGORY_QUERIES = {
     'Museums': "Museums, art galleries, and exhibitions",
     'Statues': "Statues, sculptures, and monuments",
     'Plaques': "Historical plaques, commemorative markers, and blue plaques",
-    'Busts': "Statues, busts, and sculptures of people",
-    'Stolperstein': "Stolpersteine memorials and stumbling stones",
-    'Historic Site': "Historical landmarks, heritage sites, and old buildings",
-    'Religious': "Churches, cathedrals, basilicas, monasteries, mosques, and temples",
-    'Towers': "Observation towers, clock towers, and bell towers",
-    'Tourist': "Tourist attractions, viewpoints, and points of interest",
     'Others': "Hidden gems, landmarks, and interesting places"
 };
 
 // ==========================================
-// 🧹 HELPERS
+// 🧹 HELPERS (Limpieza y Wiki)
 // ==========================================
-
 const isInvalidContext = (text) => {
     if (!text) return false;
     const lowerText = text.toLowerCase();
-    // Filtramos palabras clave que indican que NO es un lugar turístico válido
     const trashKeywords = ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document'];
     return trashKeywords.some(w => lowerText.includes(w));
 };
 
-// ==========================================
-// 📚 WIKIPEDIA HELPER
-// ==========================================
 const getWikipediaSummary = async (lat, lon, name) => {
     try {
-        // 1. Buscamos artículo por geolocalización (Radio 500m)
         const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
-        
-        const searchRes = await axios.get(searchUrl, {
-            headers: { 'User-Agent': 'CastleApp/1.0' },
-            timeout: 3000 // Timeout corto para no frenar la respuesta
-        });
-
+        const searchRes = await axios.get(searchUrl, { timeout: 3000 });
         const geoResult = searchRes.data.query?.geosearch?.[0];
         
         if (geoResult) {
-            // 2. Si hay coincidencia, pedimos extracto e imagen
             const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(geoResult.title)}&format=json&origin=*`;
             const detailsRes = await axios.get(detailsUrl, { timeout: 3000 });
-            
             const pages = detailsRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
             const pageData = pages[pageId];
-
             return {
                 title: geoResult.title,
                 description: pageData.extract ? pageData.extract.substring(0, 250) + "..." : null,
@@ -65,39 +44,168 @@ const getWikipediaSummary = async (lat, lon, name) => {
             };
         }
         return null;
-    } catch (error) {
-        // Fallamos silenciosamente en Wiki para no romper la búsqueda principal
-        return null;
-    }
+    } catch (error) { return null; }
 };
 
 // ==========================================
-// 🚀 CONTROLADOR PRINCIPAL (BÚSQUEDA EXTERNA)
+// 🗺️ 1. MAPA HÍBRIDO (Feed Principal)
+// Endpoint: router.get('/', getLocations)
+// ==========================================
+export const getLocations = async (req, res) => {
+  const { lat, lon } = req.query;
+  const googleRadius = 5000; 
+
+  if (!lat || !lon) {
+    return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
+  }
+
+  try {
+    const [dbResults, googleResults] = await Promise.all([
+      fetchFromDatabase(lat, lon),
+      fetchFromGoogle(lat, lon, googleRadius)
+    ]);
+
+    // Combinamos DB + Google
+    const combined = [...dbResults, ...googleResults];
+    res.json(combined);
+
+  } catch (error) {
+    console.error("Error Híbrido:", error);
+    res.status(500).json({ error: "Error obteniendo lugares" });
+  }
+};
+
+// --- Auxiliar DB (Knex) ---
+async function fetchFromDatabase(lat, lon) {
+  try {
+    // Busca lugares aprobados a menos de 50km
+    const query = `
+      SELECT *, 
+      (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance
+      FROM historical_locations
+      WHERE is_approved = TRUE
+      AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) < 50
+      ORDER BY distance ASC LIMIT 20
+    `;
+    // Knex usa ? para bindings. Repetimos lat/lon por la fórmula.
+    const bindings = [lat, lon, lat, lat, lon, lat];
+    const result = await db.raw(query, bindings);
+    
+    return result.rows.map(row => ({
+      id: row.id.toString(),
+      name: row.name,
+      description: row.description,
+      latitude: parseFloat(row.latitude),
+      longitude: parseFloat(row.longitude),
+      image_url: row.image_url,
+      category: 'Community Discovery',
+      source: 'db',      
+      is_yours: true
+    }));
+  } catch (err) {
+    console.error("Error DB:", err.message);
+    return []; 
+  }
+}
+
+// --- Auxiliar Google (Nearby) ---
+async function fetchFromGoogle(lat, lon, radius) {
+  try {
+    const url = 'https://places.googleapis.com/v1/places:searchNearby';
+    const requestBody = {
+      includedTypes: ["castle", "fortress", "historical_landmark", "museum", "ruins"],
+      maxResultCount: 20,
+      locationRestriction: {
+        circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
+      }
+    };
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': GOOGLE_API_KEY,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary'
+    };
+
+    const response = await axios.post(url, requestBody, { headers });
+    const places = response.data.places || [];
+
+    return places.map(place => {
+      let finalImage = null;
+      if (place.photos && place.photos.length > 0) {
+        const photoRef = place.photos[0].name;
+        finalImage = `https://places.googleapis.com/v1/${photoRef}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600`;
+      }
+      return {
+        id: place.id,
+        name: place.displayName?.text,
+        description: place.editorialSummary?.text || place.formattedAddress,
+        latitude: place.location.latitude,
+        longitude: place.location.longitude,
+        image_url: finalImage || 'https://via.placeholder.com/400x300',
+        category: 'Google Explorer',
+        source: 'google',
+        google_place_id: place.id
+      };
+    });
+  } catch (err) {
+    return [];
+  }
+}
+
+// ==========================================
+// 📥 2. SUGERIR / GUARDAR (Knex)
+// Endpoint: router.post('/suggest', suggestLocation)
+// ==========================================
+export const suggestLocation = async (req, res) => {
+  const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
+  
+  try {
+    if (!name || !latitude || !longitude) {
+        return res.status(400).json({ error: "Datos incompletos." });
+    }
+
+    // Validación duplicados
+    if (google_place_id) {
+       const check = await db.raw('SELECT id FROM historical_locations WHERE google_place_id = ?', [google_place_id]);
+       if (check.rows.length > 0) return res.status(400).json({ error: "Este lugar ya fue registrado." });
+    }
+
+    // Insertar (is_approved = FALSE)
+    const newLoc = await db.raw(
+      `INSERT INTO historical_locations 
+       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
+       VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
+       RETURNING *`,
+      [name, description, latitude, longitude, image_url, user_id, google_place_id]
+    );
+    
+    res.json({ message: "Sugerencia recibida", location: newLoc.rows[0] });
+
+  } catch (err) {
+    console.error("Error suggest:", err);
+    res.status(500).json({ error: "Error al guardar el lugar." });
+  }
+};
+
+// ==========================================
+// 🔭 3. BÚSQUEDA DE TEXTO (Google + Wiki)
+// Endpoint: router.get('/external/search', getGoogleLocations)
 // ==========================================
 export const getGoogleLocations = async (req, res) => {
     const { lat, lon, q, search, category } = req.query;
-    const textQuery = q || search; // Puede venir como 'q' o 'search'
+    const textQuery = q || search;
     const selectedCategory = category || 'All';
 
-    // Validación
     if ((!lat || !lon) && !textQuery) {
-        return res.status(400).json({ error: 'Faltan datos de ubicación o texto de búsqueda' });
+        return res.status(400).json({ error: 'Faltan datos de ubicación o texto' });
     }
 
     try {
         const url = 'https://places.googleapis.com/v1/places:searchText';
-        
-        // Construimos la query (ej: "Castles in Paris")
         const categorySearchTerm = CATEGORY_QUERIES[selectedCategory] || CATEGORY_QUERIES['All'];
         let finalQuery = textQuery ? `${categorySearchTerm} in ${textQuery}` : categorySearchTerm;
         
-        // Configuramos la petición a Google
-        let requestBody = { 
-            textQuery: finalQuery, 
-            maxResultCount: 20 
-        };
+        let requestBody = { textQuery: finalQuery, maxResultCount: 20 };
 
-        // Si hay coordenadas, priorizamos resultados cercanos (Bias)
         if (lat && lon && !textQuery) {
             requestBody.locationBias = {
                 circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: 15000.0 }
@@ -110,200 +218,60 @@ export const getGoogleLocations = async (req, res) => {
             'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary'
         };
 
-        // 1. Llamada a Google
         const response = await axios.post(url, requestBody, { headers });
         const googlePlaces = response.data.places || [];
 
-        // 2. Procesamiento y Enriquecimiento (Wiki)
+        // Enriquecemos con Wikipedia
         const enrichedData = await Promise.all(googlePlaces.map(async (place) => {
             const pLat = place.location?.latitude;
             const pLon = place.location?.longitude;
             const pName = place.displayName?.text;
 
-            // Filtro basura
             if (isInvalidContext(pName)) return null;
 
-            let finalDescription = place.editorialSummary?.text || place.formattedAddress || "Discovered via Google.";
+            let finalDescription = place.editorialSummary?.text || place.formattedAddress;
             let finalImage = null;
             let wikiTitle = null;
 
-            // Obtener imagen de Google
             if (place.photos && place.photos.length > 0) {
-                const photoReference = place.photos[0].name;
-                finalImage = `https://places.googleapis.com/v1/${photoReference}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`;
+                finalImage = `https://places.googleapis.com/v1/${place.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`;
             }
 
-            // Intentar enriquecer con Wikipedia (si tenemos coordenadas)
             if (pLat && pLon) {
                 const wikiData = await getWikipediaSummary(pLat, pLon, pName);
                 if (wikiData) {
-                    if (wikiData.description && wikiData.description.length > 50) {
-                        finalDescription = wikiData.description; // Preferimos descripción de Wiki
-                    }
-                    if (!finalImage && wikiData.imageUrl) {
-                        finalImage = wikiData.imageUrl; // Usamos foto Wiki si Google no tiene
-                    }
+                    if (wikiData.description && wikiData.description.length > 50) finalDescription = wikiData.description;
+                    if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
                     wikiTitle = wikiData.title;
                 }
             }
 
             return {
-                // Datos para mostrar en SearchScreen
-                id: place.id, 
+                id: place.id,
                 name: pName,
                 category: selectedCategory,
                 description: finalDescription,
-                image_url: finalImage || 'https://via.placeholder.com/400x300?text=No+Image',
+                image_url: finalImage || 'https://via.placeholder.com/400x300',
                 latitude: pLat,
                 longitude: pLon,
-                
-                // Datos para guardar en DB
                 google_place_id: place.id,
                 address: place.formattedAddress,
                 wiki_title: wikiTitle,
-                source: 'google' 
+                source: 'google'
             };
         }));
 
-        // 3. Limpiar nulos y responder
         const validResults = enrichedData.filter(item => item !== null);
-
-        // Devolvemos { data: [...] } para compatibilidad con tu frontend
         res.json({ data: validResults });
 
     } catch (error) {
-        console.error("🔥 Error Google Places:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Error obteniendo lugares externos' });
-    }
-};
-
-export const getLocations = async (req, res) => {
-  const { lat, lon } = req.query;
-  const googleRadius = 5000; // 5km a la redonda
-
-  if (!lat || !lon) {
-    return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
-  }
-
-  try {
-    // Ejecutamos las dos búsquedas al mismo tiempo (Paralelo)
-    const [dbResults, googleResults] = await Promise.all([
-      fetchFromDatabase(lat, lon),
-      fetchFromGoogle(lat, lon, googleRadius)
-    ]);
-
-    // Unimos los resultados en una sola lista
-    const combined = [...dbResults, ...googleResults];
-    res.json(combined);
-
-  } catch (error) {
-    console.error("Error Híbrido:", error);
-    res.status(500).json({ error: "Error obteniendo lugares" });
-  }
-};
-export const getPendingLocations = async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM historical_locations WHERE is_approved = FALSE ORDER BY id DESC');
-        res.json(result.rows);
-    } catch (e) { res.status(500).json({error: e.message}); }
-};
-
-// B. Aprobar (Esta es la que te faltaba)
-export const approveLocation = async (req, res) => {
-    try {
-        // Actualizamos la base de datos: is_approved = TRUE
-        await pool.query('UPDATE historical_locations SET is_approved = TRUE WHERE id = $1', [req.params.id]);
-        res.json({ message: "Lugar aprobado y visible en el mapa." });
-    } catch (e) { 
-        console.error("Error aprobando:", e);
-        res.status(500).json({error: e.message}); 
-    }
-};
-
-// C. Rechazar (Eliminar)
-export const rejectLocation = async (req, res) => {
-    try {
-        await pool.query('DELETE FROM historical_locations WHERE id = $1', [req.params.id]);
-        res.json({ message: "Lugar rechazado y eliminado." });
-    } catch (e) { 
-        console.error("Error rechazando:", e);
-        res.status(500).json({error: e.message}); 
+        res.status(500).json({ error: 'Error búsqueda externa' });
     }
 };
 
 // ==========================================
-// 📥 2. SUGERIR (SUBIR LUGAR)
-// ==========================================
-export const suggestLocation = async (req, res) => {
-  // 1. Recibimos los datos que envía el Frontend
-  const { 
-    name, 
-    description, 
-    latitude, 
-    longitude, 
-    image_url, 
-    user_id, 
-    google_place_id 
-  } = req.body;
-  
-  try {
-    // 2. VALIDACIÓN BÁSICA
-    // Un lugar debe tener al menos nombre y ubicación.
-    if (!name || !latitude || !longitude) {
-        return res.status(400).json({ error: "Datos incompletos: Nombre y coordenadas requeridos." });
-    }
-
-    // 3. DETECTOR DE DUPLICADOS (Anti-Spam)
-    // Si viene con ID de Google, verificamos si ya lo tenemos en la DB.
-    if (google_place_id) {
-       const check = await pool.query(
-         'SELECT id FROM historical_locations WHERE google_place_id = $1', 
-         [google_place_id]
-       );
-       
-       if (check.rows.length > 0) {
-         // Si ya existe, devolvemos error 400 para avisar al usuario
-         return res.status(400).json({ error: "¡Este lugar ya ha sido registrado por otro explorador!" });
-       }
-    }
-
-    // 4. INSERTAR EN BASE DE DATOS
-    // Nota importante: is_approved = FALSE
-    // Esto significa que el lugar se guarda, pero NO aparece en el mapa público
-    // hasta que tú (Admin) lo apruebes.
-    const query = `
-      INSERT INTO historical_locations 
-      (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
-      VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7) 
-      RETURNING *
-    `;
-
-    const values = [
-      name, 
-      description || "Sin descripción", // Fallback si no hay descripción
-      latitude, 
-      longitude, 
-      image_url, 
-      user_id || null, // Puede ser null si es anónimo
-      google_place_id
-    ];
-
-    const newLoc = await pool.query(query, values);
-    
-    // 5. RESPUESTA DE ÉXITO
-    res.json({ 
-      message: "¡Hallazgo enviado a revisión! Gracias por contribuir.", 
-      location: newLoc.rows[0] 
-    });
-
-  } catch (err) {
-    console.error("Error al guardar sugerencia:", err);
-    res.status(500).json({ error: "Error interno al guardar el lugar." });
-  }
-};
-
-// ==========================================
-// 📖 ENDPOINT: READ MORE (Detalle Completo)
+// 📖 4. WIKIPEDIA DETALLE
+// Endpoint: router.get('/external/wiki', getWikiFullDetails)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
@@ -311,15 +279,37 @@ export const getWikiFullDetails = async (req, res) => {
 
     try {
         const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-        const response = await axios.get(url, { headers: { 'User-Agent': 'CastleApp/1.0' } });
-        
+        const response = await axios.get(url);
         const pages = response.data.query.pages;
         const pageId = Object.keys(pages)[0];
         
-        if (pageId === "-1") return res.status(404).json({ error: "Artículo no encontrado" });
-
-        res.json({ full_description: pages[pageId].extract || "No details found." });
+        if (pageId === "-1") return res.status(404).json({ error: "No encontrado" });
+        res.json({ full_description: pages[pageId].extract });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+};
+
+// ==========================================
+// 🛡️ 5. ADMIN (Knex)
+// ==========================================
+export const getPendingLocations = async (req, res) => {
+    try {
+        const result = await db.raw('SELECT * FROM historical_locations WHERE is_approved = FALSE ORDER BY id DESC');
+        res.json(result.rows);
+    } catch (e) { res.status(500).json({error: e.message}); }
+};
+
+export const approveLocation = async (req, res) => {
+    try {
+        await db.raw('UPDATE historical_locations SET is_approved = TRUE WHERE id = ?', [req.params.id]);
+        res.json({ message: "Aprobado" });
+    } catch (e) { res.status(500).json({error: e.message}); }
+};
+
+export const rejectLocation = async (req, res) => {
+    try {
+        await db.raw('DELETE FROM historical_locations WHERE id = ?', [req.params.id]);
+        res.json({ message: "Eliminado" });
+    } catch (e) { res.status(500).json({error: e.message}); }
 };
