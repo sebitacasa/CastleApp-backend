@@ -176,6 +176,31 @@ export const getGoogleLocations = async (req, res) => {
         res.status(500).json({ error: 'Error obteniendo lugares externos' });
     }
 };
+
+export const getLocations = async (req, res) => {
+  const { lat, lon } = req.query;
+  const googleRadius = 5000; // 5km a la redonda
+
+  if (!lat || !lon) {
+    return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
+  }
+
+  try {
+    // Ejecutamos las dos búsquedas al mismo tiempo (Paralelo)
+    const [dbResults, googleResults] = await Promise.all([
+      fetchFromDatabase(lat, lon),
+      fetchFromGoogle(lat, lon, googleRadius)
+    ]);
+
+    // Unimos los resultados en una sola lista
+    const combined = [...dbResults, ...googleResults];
+    res.json(combined);
+
+  } catch (error) {
+    console.error("Error Híbrido:", error);
+    res.status(500).json({ error: "Error obteniendo lugares" });
+  }
+};
 export const getPendingLocations = async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM historical_locations WHERE is_approved = FALSE ORDER BY id DESC');
