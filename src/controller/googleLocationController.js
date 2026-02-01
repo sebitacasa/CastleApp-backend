@@ -1,10 +1,13 @@
 import axios from 'axios';
-// 👇 Importamos la conexión Knex
+// 👇 Importamos la conexión a la DB
 import db from '../config/db.js'; 
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-// 🏰 Categorías
+// ==========================================
+// 🏰 DICCIONARIO DE BÚSQUEDA (Tus categorías)
+// ==========================================
+// Esto se usa cuando buscas por TEXTO (SearchScreen)
 const CATEGORY_QUERIES = {
     'All': "Top tourist attractions, historical sites, museums, and castles",
     'Castles': "Castles, palaces, fortresses, and citadels",
@@ -48,11 +51,13 @@ const getWikipediaSummary = async (lat, lon, name) => {
 };
 
 // ==========================================
-// 🗺️ 1. MAPA HÍBRIDO (Feed Principal)
+// 🗺️ 1. MAPA HÍBRIDO (GET /) - GPS
 // ==========================================
 export const getLocations = async (req, res) => {
   const { lat, lon } = req.query;
-  const googleRadius = 5000; 
+  
+  // 🌍 RADIO AMPLIO: 10km para asegurar que agarre cosas si estás lejos del centro
+  const googleRadius = 10000; 
 
   if (!lat || !lon) {
     return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
@@ -73,16 +78,14 @@ export const getLocations = async (req, res) => {
   }
 };
 
-// --- Auxiliar DB (USANDO LATITUDE / LONGITUDE) ---
+// --- Auxiliar DB (Lee 'lat/lon', devuelve 'latitude/longitude') ---
 async function fetchFromDatabase(lat, lon) {
   try {
-    // 👇 AQUÍ ESTÁ EL ARREGLO: Usamos 'latitude' y 'longitude'
     const query = `
       SELECT *, 
-      (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance
+      (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
       FROM historical_locations
       WHERE is_approved = TRUE
-      AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) < 50
       ORDER BY distance ASC LIMIT 20
     `;
     const bindings = [lat, lon, lat, lat, lon, lat];
@@ -92,8 +95,8 @@ async function fetchFromDatabase(lat, lon) {
       id: row.id.toString(),
       name: row.name,
       description: row.description,
-      latitude: parseFloat(row.latitude), // Usamos latitude
-      longitude: parseFloat(row.longitude), // Usamos longitude
+      latitude: parseFloat(row.lat),
+      longitude: parseFloat(row.lon),
       image_url: row.image_url,
       category: 'Community Discovery',
       source: 'db',      
@@ -105,17 +108,25 @@ async function fetchFromDatabase(lat, lon) {
   }
 }
 
-// --- Auxiliar Google (Nearby) ---
+// --- Auxiliar Google (GPS - Búsqueda por Cercanía) ---
 async function fetchFromGoogle(lat, lon, radius) {
   try {
     const url = 'https://places.googleapis.com/v1/places:searchNearby';
+    
+    // 👇 AQUÍ ESTÁ LA MAGIA: Pedimos TODO TIPO de lugares interesantes
     const requestBody = {
-      includedTypes: ["castle", "fortress", "historical_landmark", "museum", "ruins"],
+      includedTypes: [
+          "castle", "fortress", "historical_landmark", "museum", "ruins", // Lo clásico
+          "art_gallery", "church", "place_of_worship", "hindu_temple", "mosque", "synagogue", // Religioso / Arte
+          "monument", "sculpture", "tourist_attraction", "town_square", "park", // Urbano
+          "library", "city_hall", "embassy" // Edificios importantes
+      ],
       maxResultCount: 20,
       locationRestriction: {
         circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
       }
     };
+
     const headers = {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_API_KEY,
@@ -128,8 +139,7 @@ async function fetchFromGoogle(lat, lon, radius) {
     return places.map(place => {
       let finalImage = null;
       if (place.photos && place.photos.length > 0) {
-        const photoRef = place.photos[0].name;
-        finalImage = `https://places.googleapis.com/v1/${photoRef}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600`;
+        finalImage = `https://places.googleapis.com/v1/${place.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600`;
       }
       return {
         id: place.id,
@@ -144,12 +154,13 @@ async function fetchFromGoogle(lat, lon, radius) {
       };
     });
   } catch (err) {
+    console.error("Error Google Nearby:", err.response?.data || err.message);
     return [];
   }
 }
 
 // ==========================================
-// 📥 2. SUGERIR / GUARDAR (USANDO LATITUDE / LONGITUDE)
+// 📥 2. SUGERIR / GUARDAR (POST /suggest)
 // ==========================================
 export const suggestLocation = async (req, res) => {
   const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
@@ -164,10 +175,10 @@ export const suggestLocation = async (req, res) => {
        if (check.rows.length > 0) return res.status(400).json({ error: "Este lugar ya fue registrado." });
     }
 
-    // 👇 AQUÍ TAMBIÉN: Insertamos en latitude y longitude
+    // Guarda en columnas 'lat' y 'lon'
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
-       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
+       (name, description, lat, lon, image_url, created_by_user_id, is_approved, google_place_id) 
        VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
        RETURNING *`,
       [name, description, latitude, longitude, image_url, user_id, google_place_id]
@@ -182,27 +193,36 @@ export const suggestLocation = async (req, res) => {
 };
 
 // ==========================================
-// 🔭 3. BÚSQUEDA DE TEXTO (Google + Wiki)
+// 🔭 3. BÚSQUEDA DE TEXTO (GET /external/search)
 // ==========================================
 export const getGoogleLocations = async (req, res) => {
     const { lat, lon, q, search, category } = req.query;
     const textQuery = q || search;
     const selectedCategory = category || 'All';
 
-    if ((!lat || !lon) && !textQuery) {
-        return res.status(400).json({ error: 'Faltan datos de ubicación o texto' });
+    // Validación relajada: Si falta texto, usamos la categoría por defecto
+    if (!textQuery && !lat) {
+        return res.status(400).json({ error: 'Faltan datos de búsqueda' });
     }
 
     try {
         const url = 'https://places.googleapis.com/v1/places:searchText';
+        
+        // 👇 AQUI USAMOS TU DICCIONARIO
         const categorySearchTerm = CATEGORY_QUERIES[selectedCategory] || CATEGORY_QUERIES['All'];
-        let finalQuery = textQuery ? `${categorySearchTerm} in ${textQuery}` : categorySearchTerm;
+        
+        // Si el usuario escribió algo (ej: "Paris"), buscamos "Castles in Paris".
+        // Si no escribió nada (búsqueda automática), buscamos solo la categoría.
+        let finalQuery = textQuery 
+            ? `${categorySearchTerm} in ${textQuery}` 
+            : categorySearchTerm;
         
         let requestBody = { textQuery: finalQuery, maxResultCount: 20 };
 
-        if (lat && lon && !textQuery) {
+        // Si tenemos coordenadas, le damos preferencia a lo cercano (Bias)
+        if (lat && lon) {
             requestBody.locationBias = {
-                circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: 15000.0 }
+                circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: 20000.0 } // 20km bias
             };
         }
 
@@ -215,6 +235,7 @@ export const getGoogleLocations = async (req, res) => {
         const response = await axios.post(url, requestBody, { headers });
         const googlePlaces = response.data.places || [];
 
+        // Enriquecemos con Wikipedia
         const enrichedData = await Promise.all(googlePlaces.map(async (place) => {
             const pLat = place.location?.latitude;
             const pLon = place.location?.longitude;
@@ -258,6 +279,7 @@ export const getGoogleLocations = async (req, res) => {
         res.json({ data: validResults });
 
     } catch (error) {
+        console.error("Error Text Search:", error.response?.data || error.message);
         res.status(500).json({ error: 'Error búsqueda externa' });
     }
 };
@@ -283,7 +305,7 @@ export const getWikiFullDetails = async (req, res) => {
 };
 
 // ==========================================
-// 🛡️ 5. ADMIN (Knex)
+// 🛡️ 5. ADMIN
 // ==========================================
 export const getPendingLocations = async (req, res) => {
     try {
