@@ -132,3 +132,35 @@ export const login = async (req, res) => {
         res.status(500).json({ message: 'Error en el servidor' });
     }
 };
+
+// EN: controller/authController.js
+
+// Asegúrate de tener esto arriba (o como se llame tu archivo de conexión)
+// import { pool } from '../db.js'; 
+
+export const deleteUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // 1. IMPORTANTE: Borrar datos relacionados (Foreign Keys)
+    // Si no tienes configurado "ON DELETE CASCADE" en tu base de datos,
+    // esto fallará si no borras primero los favoritos o lugares del usuario.
+    // Descomenta esto si te da error de "violación de llave foránea":
+    
+    // await pool.query('DELETE FROM favorites WHERE user_id = $1', [id]);
+    // await pool.query('DELETE FROM locations WHERE user_id = $1', [id]);
+    
+    // 2. Borrar al usuario
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING *', [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    res.json({ message: 'Cuenta eliminada con éxito', deletedUser: result.rows[0] });
+
+  } catch (error) {
+    console.error("Error borrando usuario:", error);
+    res.status(500).json({ error: 'Error al eliminar la cuenta' });
+  }
+};

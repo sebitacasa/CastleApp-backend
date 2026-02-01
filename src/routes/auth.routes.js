@@ -1,10 +1,12 @@
 import { Router } from 'express';
-import { register, login, googleLogin } from '../controller/authController.js';
+import { register, login, googleLogin, deleteUser } from '../controller/authController.js';
 
 const router = Router();
 
 router.post('/register', register);
 router.post('/login', login);
 router.post('/google', googleLogin); // <--- Nueva ruta
-
+// DELETE /api/users/:id
+// Asegúrate de proteger esta ruta si tienes middleware de autenticación
+router.delete('/users/:id', deleteUser);
 export default router;
