@@ -4,7 +4,7 @@ import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-// 🏰 Categorías para enriquecer la búsqueda de texto
+// 🏰 Categorías
 const CATEGORY_QUERIES = {
     'All': "Top tourist attractions, historical sites, museums, and castles",
     'Castles': "Castles, palaces, fortresses, and citadels",
@@ -64,7 +64,6 @@ export const getLocations = async (req, res) => {
       fetchFromGoogle(lat, lon, googleRadius)
     ]);
 
-    // Combinamos DB + Google
     const combined = [...dbResults, ...googleResults];
     res.json(combined);
 
@@ -74,28 +73,27 @@ export const getLocations = async (req, res) => {
   }
 };
 
-// --- Auxiliar DB (Adaptado a columnas 'lat' y 'lon') ---
+// --- Auxiliar DB (USANDO LATITUDE / LONGITUDE) ---
 async function fetchFromDatabase(lat, lon) {
   try {
-    // 👇 CAMBIO: Usamos 'lat' y 'lon' en la fórmula SQL porque así se llaman en tu DB
+    // 👇 AQUÍ ESTÁ EL ARREGLO: Usamos 'latitude' y 'longitude'
     const query = `
       SELECT *, 
-      (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
+      (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance
       FROM historical_locations
       WHERE is_approved = TRUE
-      AND (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) < 50
+      AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) < 50
       ORDER BY distance ASC LIMIT 20
     `;
     const bindings = [lat, lon, lat, lat, lon, lat];
     const result = await db.raw(query, bindings);
     
-    // 👇 CAMBIO: Mapeamos row.lat -> latitude para que el Frontend lo entienda
     return result.rows.map(row => ({
       id: row.id.toString(),
       name: row.name,
       description: row.description,
-      latitude: parseFloat(row.lat), // Leemos 'lat' de la DB
-      longitude: parseFloat(row.lon), // Leemos 'lon' de la DB
+      latitude: parseFloat(row.latitude), // Usamos latitude
+      longitude: parseFloat(row.longitude), // Usamos longitude
       image_url: row.image_url,
       category: 'Community Discovery',
       source: 'db',      
@@ -151,7 +149,7 @@ async function fetchFromGoogle(lat, lon, radius) {
 }
 
 // ==========================================
-// 📥 2. SUGERIR / GUARDAR (Adaptado a 'lat' y 'lon')
+// 📥 2. SUGERIR / GUARDAR (USANDO LATITUDE / LONGITUDE)
 // ==========================================
 export const suggestLocation = async (req, res) => {
   const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
@@ -161,16 +159,15 @@ export const suggestLocation = async (req, res) => {
         return res.status(400).json({ error: "Datos incompletos." });
     }
 
-    // Validación duplicados
     if (google_place_id) {
        const check = await db.raw('SELECT id FROM historical_locations WHERE google_place_id = ?', [google_place_id]);
        if (check.rows.length > 0) return res.status(400).json({ error: "Este lugar ya fue registrado." });
     }
 
-    // 👇 CAMBIO: Insertamos en las columnas 'lat' y 'lon'
+    // 👇 AQUÍ TAMBIÉN: Insertamos en latitude y longitude
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
-       (name, description, lat, lon, image_url, created_by_user_id, is_approved, google_place_id) 
+       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
        VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
        RETURNING *`,
       [name, description, latitude, longitude, image_url, user_id, google_place_id]
