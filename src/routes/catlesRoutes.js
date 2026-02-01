@@ -1,56 +1,58 @@
 import { Router } from 'express';
-import { pool } from '../config/db.js'; // Importamos la conexión para la utilidad de limpieza
 
-// 1. CONTROLADOR INTERNO (Tu Propiedad)
-// Maneja tu base de datos: lo que ya tienes guardado y lo que está pendiente de aprobación.
-import { 
-  getLocations,        // Trae tus castillos aprobados (para el Mapa Principal)
-  suggestLocation,     // Guarda un nuevo hallazgo (El "Puente" de Google a tu DB)
-  getPendingLocations, // Admin: Ver qué han subido
-  approveLocation,     // Admin: Dar el visto bueno
-  rejectLocation       // Admin: Borrar basura
-} from '../controller/locationsController.js'; 
+// 👇 CORRECCIÓN IMPORTANTE: 
+// Apuntamos a '../db.js' (en la raíz de src) para arreglar el error de módulo no encontrado.
+// Si tu archivo sigue en 'config/db.js', cambia esto a '../config/db.js'.
+import { pool } from '../config/db.js'; 
 
-// 2. CONTROLADOR EXTERNO (El Explorador)
-// Maneja las búsquedas en Google y Wikipedia. No guarda nada, solo "mira".
+// 1. CONTROLADOR INTERNO (Tu Base de Datos + Híbrido)
+// Este controlador ahora es inteligente: mezcla tus datos con los de Google.
 import { 
-  getGoogleLocations, 
-  getWikiFullDetails 
-} from '../controller/googleLocationController.js';
+    getGoogleLocations, 
+  getWikiFullDetails,
+  getLocations,        // Mapa Híbrido (Google + Tu DB)
+  suggestLocation,     // Guardar nuevo hallazgo
+  getPendingLocations, // Admin: Ver pendientes
+  approveLocation,     // Admin: Aprobar
+  rejectLocation       // Admin: Rechazar
+} from '../controller/googleLocationController.js'; 
+
+// 2. CONTROLADOR EXTERNO (Búsqueda Manual)
+// Este maneja la pantalla de búsqueda específica ("SearchScreen").
 
 const router = Router();
 
 // ==========================================
-// 🗺️ ZONA 1: TU MAPA (Lo que ya es tuyo)
+// 🗺️ ZONA 1: EL MAPA PRINCIPAL (Híbrido)
 // ==========================================
 
 // GET /api/locations?lat=...&lon=...
-// Uso: El Mapa Principal de la App.
-// Acción: Muestra solo los lugares que YA están en tu base de datos y aprobados.
+// Uso: FeedScreen y MapScreen.
+// Acción: Devuelve una mezcla de lugares de Google (rojos) y tus lugares (dorados).
 router.get('/', getLocations); 
 
 
 // ==========================================
-// 🌉 ZONA 2: EL PUENTE (Guardar Hallazgos)
+// 📥 ZONA 2: GUARDAR HALLAZGOS
 // ==========================================
 
 // POST /api/locations/suggest
-// Uso: Botón "Sugerir Lugar" o "Reclamar Hallazgo".
-// Acción: Recibe datos (ya sea de Google o manuales) y los guarda en TU base de datos como "Pendiente".
+// Uso: Botón "Sugerir" en la app.
+// Acción: Guarda un lugar en TU base de datos como "Pendiente" (is_approved = false).
 router.post('/suggest', suggestLocation); 
 
 
 // ==========================================
-// 🔭 ZONA 3: EL RADAR (Buscar fuera)
+// 🔭 ZONA 3: EL BUSCADOR (SearchScreen)
 // ==========================================
 
 // GET /api/locations/external/search?q=castillo&lat=...
 // Uso: Pantalla de "Buscar Lugar Nuevo".
-// Acción: Busca en Google Maps en tiempo real. Devuelve resultados con "source: google".
+// Acción: Busca texto libre en Google Maps.
 router.get('/external/search', getGoogleLocations);
 
 // GET /api/locations/external/wiki?title=...
-// Uso: Botón "Leer más" en la ficha de detalle.
+// Uso: Botón "Leer más" para traer info detallada.
 router.get('/external/wiki', getWikiFullDetails);
 
 
@@ -58,13 +60,13 @@ router.get('/external/wiki', getWikiFullDetails);
 // 🛡️ ZONA 4: ADMINISTRACIÓN (Moderación)
 // ==========================================
 
-// Ver lista de pendientes (Para tu panel de admin)
+// Ver lista de pendientes
 router.get('/admin/pending', getPendingLocations);
 
-// Aprobar un lugar (Pasa de invisible a visible en el mapa)
+// Aprobar (Hacer visible un lugar)
 router.put('/admin/approve/:id', approveLocation);
 
-// Rechazar un lugar (Se borra de la base de datos)
+// Rechazar (Borrar de la base de datos)
 router.delete('/admin/reject/:id', rejectLocation);
 
 
@@ -72,11 +74,11 @@ router.delete('/admin/reject/:id', rejectLocation);
 // ☢️ ZONA DE PELIGRO (Utilidades)
 // ==========================================
 
-// Borrar toda la base de datos (Solo para desarrollo)
+// Borrar toda la base de datos (¡CUIDADO!)
 router.get('/nuke-db', async (req, res) => {
     try {
         await pool.query('TRUNCATE TABLE historical_locations CASCADE');
-        res.send('✅ LISTO: Base de datos purgada. El mapa debería estar vacío ahora.');
+        res.send('✅ LISTO: Base de datos purgada. El mapa ha sido reiniciado.');
     } catch (e) {
         console.error(e);
         res.status(500).send('Error purgado DB: ' + e.message);
