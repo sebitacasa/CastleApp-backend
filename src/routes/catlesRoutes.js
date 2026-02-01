@@ -85,4 +85,33 @@ router.get('/nuke-db', async (req, res) => {
     }
 });
 
+// ... (resto del archivo arriba)
+
+// ==========================================
+// 🔧 HERRAMIENTA DE REPARACIÓN (Fix DB)
+// ==========================================
+// Ejecuta esto una sola vez para arreglar los nombres de las columnas
+router.get('/fix-db-schema', async (req, res) => {
+    try {
+        // 1. Intentamos renombrar 'lat' a 'latitude'
+        // (Si falla es porque ya se llama latitude o no existe, entonces pasamos al catch)
+        await db.raw('ALTER TABLE historical_locations RENAME COLUMN lat TO latitude');
+        await db.raw('ALTER TABLE historical_locations RENAME COLUMN lon TO longitude');
+        
+        res.send("✅ ÉXITO: Las columnas han sido renombradas de 'lat/lon' a 'latitude/longitude'. Ahora el mapa funcionará.");
+    } catch (error) {
+        // 2. Si falla lo anterior, intentamos ver si es que faltan
+        try {
+            // Solo las crea si no existen
+            await db.raw('ALTER TABLE historical_locations ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION');
+            await db.raw('ALTER TABLE historical_locations ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION');
+            res.send("⚠️ AVISO: No se encontraron 'lat/lon', así que se crearon columnas nuevas 'latitude/longitude'.");
+        } catch (e2) {
+            res.status(500).send("❌ ERROR CRÍTICO: " + error.message + " | " + e2.message);
+        }
+    }
+});
+
+
+
 export default router;
