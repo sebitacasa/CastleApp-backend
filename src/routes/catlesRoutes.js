@@ -77,7 +77,7 @@ router.delete('/admin/reject/:id', rejectLocation);
 // Borrar toda la base de datos (¡CUIDADO!)
 router.get('/nuke-db', async (req, res) => {
     try {
-        await db.query('TRUNCATE TABLE historical_locations CASCADE');
+        await db.raw('TRUNCATE TABLE historical_locations CASCADE');
         res.send('✅ LISTO: Base de datos purgada. El mapa ha sido reiniciado.');
     } catch (e) {
         console.error(e);
