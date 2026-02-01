@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pool } from '../db.js'; // Importamos la conexión para la utilidad de limpieza
+import { pool } from '../config/db.js'; // Importamos la conexión para la utilidad de limpieza
 
 // 1. CONTROLADOR INTERNO (Tu Propiedad)
 // Maneja tu base de datos: lo que ya tienes guardado y lo que está pendiente de aprobación.
