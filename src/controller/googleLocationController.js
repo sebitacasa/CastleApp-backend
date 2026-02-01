@@ -1,5 +1,5 @@
 import axios from 'axios';
-// 👇 Importamos la conexión Knex (Asegúrate que la ruta sea correcta)
+// 👇 Importamos la conexión Knex
 import db from '../config/db.js'; 
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -16,7 +16,7 @@ const CATEGORY_QUERIES = {
 };
 
 // ==========================================
-// 🧹 HELPERS (Limpieza y Wiki)
+// 🧹 HELPERS
 // ==========================================
 const isInvalidContext = (text) => {
     if (!text) return false;
@@ -49,7 +49,6 @@ const getWikipediaSummary = async (lat, lon, name) => {
 
 // ==========================================
 // 🗺️ 1. MAPA HÍBRIDO (Feed Principal)
-// Endpoint: router.get('/', getLocations)
 // ==========================================
 export const getLocations = async (req, res) => {
   const { lat, lon } = req.query;
@@ -75,28 +74,28 @@ export const getLocations = async (req, res) => {
   }
 };
 
-// --- Auxiliar DB (Knex) ---
+// --- Auxiliar DB (Adaptado a columnas 'lat' y 'lon') ---
 async function fetchFromDatabase(lat, lon) {
   try {
-    // Busca lugares aprobados a menos de 50km
+    // 👇 CAMBIO: Usamos 'lat' y 'lon' en la fórmula SQL porque así se llaman en tu DB
     const query = `
       SELECT *, 
-      (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance
+      (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
       FROM historical_locations
       WHERE is_approved = TRUE
-      AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) < 50
+      AND (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) < 50
       ORDER BY distance ASC LIMIT 20
     `;
-    // Knex usa ? para bindings. Repetimos lat/lon por la fórmula.
     const bindings = [lat, lon, lat, lat, lon, lat];
     const result = await db.raw(query, bindings);
     
+    // 👇 CAMBIO: Mapeamos row.lat -> latitude para que el Frontend lo entienda
     return result.rows.map(row => ({
       id: row.id.toString(),
       name: row.name,
       description: row.description,
-      latitude: parseFloat(row.latitude),
-      longitude: parseFloat(row.longitude),
+      latitude: parseFloat(row.lat), // Leemos 'lat' de la DB
+      longitude: parseFloat(row.lon), // Leemos 'lon' de la DB
       image_url: row.image_url,
       category: 'Community Discovery',
       source: 'db',      
@@ -152,8 +151,7 @@ async function fetchFromGoogle(lat, lon, radius) {
 }
 
 // ==========================================
-// 📥 2. SUGERIR / GUARDAR (Knex)
-// Endpoint: router.post('/suggest', suggestLocation)
+// 📥 2. SUGERIR / GUARDAR (Adaptado a 'lat' y 'lon')
 // ==========================================
 export const suggestLocation = async (req, res) => {
   const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
@@ -169,10 +167,10 @@ export const suggestLocation = async (req, res) => {
        if (check.rows.length > 0) return res.status(400).json({ error: "Este lugar ya fue registrado." });
     }
 
-    // Insertar (is_approved = FALSE)
+    // 👇 CAMBIO: Insertamos en las columnas 'lat' y 'lon'
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
-       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
+       (name, description, lat, lon, image_url, created_by_user_id, is_approved, google_place_id) 
        VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
        RETURNING *`,
       [name, description, latitude, longitude, image_url, user_id, google_place_id]
@@ -188,7 +186,6 @@ export const suggestLocation = async (req, res) => {
 
 // ==========================================
 // 🔭 3. BÚSQUEDA DE TEXTO (Google + Wiki)
-// Endpoint: router.get('/external/search', getGoogleLocations)
 // ==========================================
 export const getGoogleLocations = async (req, res) => {
     const { lat, lon, q, search, category } = req.query;
@@ -221,7 +218,6 @@ export const getGoogleLocations = async (req, res) => {
         const response = await axios.post(url, requestBody, { headers });
         const googlePlaces = response.data.places || [];
 
-        // Enriquecemos con Wikipedia
         const enrichedData = await Promise.all(googlePlaces.map(async (place) => {
             const pLat = place.location?.latitude;
             const pLon = place.location?.longitude;
@@ -271,7 +267,6 @@ export const getGoogleLocations = async (req, res) => {
 
 // ==========================================
 // 📖 4. WIKIPEDIA DETALLE
-// Endpoint: router.get('/external/wiki', getWikiFullDetails)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
