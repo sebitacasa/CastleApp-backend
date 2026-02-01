@@ -3,7 +3,7 @@ import { Router } from 'express';
 // 👇 CORRECCIÓN IMPORTANTE: 
 // Apuntamos a '../db.js' (en la raíz de src) para arreglar el error de módulo no encontrado.
 // Si tu archivo sigue en 'config/db.js', cambia esto a '../config/db.js'.
-import { pool } from '../config/db.js'; 
+import db from '../config/db.js'; 
 
 // 1. CONTROLADOR INTERNO (Tu Base de Datos + Híbrido)
 // Este controlador ahora es inteligente: mezcla tus datos con los de Google.
@@ -77,7 +77,7 @@ router.delete('/admin/reject/:id', rejectLocation);
 // Borrar toda la base de datos (¡CUIDADO!)
 router.get('/nuke-db', async (req, res) => {
     try {
-        await pool.query('TRUNCATE TABLE historical_locations CASCADE');
+        await db.query('TRUNCATE TABLE historical_locations CASCADE');
         res.send('✅ LISTO: Base de datos purgada. El mapa ha sido reiniciado.');
     } catch (e) {
         console.error(e);
