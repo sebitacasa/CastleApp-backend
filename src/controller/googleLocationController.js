@@ -176,6 +176,106 @@ export const getGoogleLocations = async (req, res) => {
         res.status(500).json({ error: 'Error obteniendo lugares externos' });
     }
 };
+export const getPendingLocations = async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM historical_locations WHERE is_approved = FALSE ORDER BY id DESC');
+        res.json(result.rows);
+    } catch (e) { res.status(500).json({error: e.message}); }
+};
+
+// B. Aprobar (Esta es la que te faltaba)
+export const approveLocation = async (req, res) => {
+    try {
+        // Actualizamos la base de datos: is_approved = TRUE
+        await pool.query('UPDATE historical_locations SET is_approved = TRUE WHERE id = $1', [req.params.id]);
+        res.json({ message: "Lugar aprobado y visible en el mapa." });
+    } catch (e) { 
+        console.error("Error aprobando:", e);
+        res.status(500).json({error: e.message}); 
+    }
+};
+
+// C. Rechazar (Eliminar)
+export const rejectLocation = async (req, res) => {
+    try {
+        await pool.query('DELETE FROM historical_locations WHERE id = $1', [req.params.id]);
+        res.json({ message: "Lugar rechazado y eliminado." });
+    } catch (e) { 
+        console.error("Error rechazando:", e);
+        res.status(500).json({error: e.message}); 
+    }
+};
+
+// ==========================================
+// 📥 2. SUGERIR (SUBIR LUGAR)
+// ==========================================
+export const suggestLocation = async (req, res) => {
+  // 1. Recibimos los datos que envía el Frontend
+  const { 
+    name, 
+    description, 
+    latitude, 
+    longitude, 
+    image_url, 
+    user_id, 
+    google_place_id 
+  } = req.body;
+  
+  try {
+    // 2. VALIDACIÓN BÁSICA
+    // Un lugar debe tener al menos nombre y ubicación.
+    if (!name || !latitude || !longitude) {
+        return res.status(400).json({ error: "Datos incompletos: Nombre y coordenadas requeridos." });
+    }
+
+    // 3. DETECTOR DE DUPLICADOS (Anti-Spam)
+    // Si viene con ID de Google, verificamos si ya lo tenemos en la DB.
+    if (google_place_id) {
+       const check = await pool.query(
+         'SELECT id FROM historical_locations WHERE google_place_id = $1', 
+         [google_place_id]
+       );
+       
+       if (check.rows.length > 0) {
+         // Si ya existe, devolvemos error 400 para avisar al usuario
+         return res.status(400).json({ error: "¡Este lugar ya ha sido registrado por otro explorador!" });
+       }
+    }
+
+    // 4. INSERTAR EN BASE DE DATOS
+    // Nota importante: is_approved = FALSE
+    // Esto significa que el lugar se guarda, pero NO aparece en el mapa público
+    // hasta que tú (Admin) lo apruebes.
+    const query = `
+      INSERT INTO historical_locations 
+      (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
+      VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7) 
+      RETURNING *
+    `;
+
+    const values = [
+      name, 
+      description || "Sin descripción", // Fallback si no hay descripción
+      latitude, 
+      longitude, 
+      image_url, 
+      user_id || null, // Puede ser null si es anónimo
+      google_place_id
+    ];
+
+    const newLoc = await pool.query(query, values);
+    
+    // 5. RESPUESTA DE ÉXITO
+    res.json({ 
+      message: "¡Hallazgo enviado a revisión! Gracias por contribuir.", 
+      location: newLoc.rows[0] 
+    });
+
+  } catch (err) {
+    console.error("Error al guardar sugerencia:", err);
+    res.status(500).json({ error: "Error interno al guardar el lugar." });
+  }
+};
 
 // ==========================================
 // 📖 ENDPOINT: READ MORE (Detalle Completo)
