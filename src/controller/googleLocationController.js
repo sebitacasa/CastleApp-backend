@@ -1,8 +1,10 @@
 import axios from 'axios';
-import db from '../config/db.js';
+// Nota: No importamos 'pool' aquí porque la búsqueda externa 
+// no toca la base de datos hasta que el usuario decida "Sugerir" el lugar.
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'TU_API_KEY_AQUI'; 
 
+// 🏰 Categorías (Optimizadas para hallazgos históricos)
 const CATEGORY_QUERIES = {
     'All': "Top tourist attractions, historical sites, museums, and castles",
     'Castles': "Castles, palaces, fortresses, and citadels",
@@ -22,47 +24,42 @@ const CATEGORY_QUERIES = {
 // ==========================================
 // 🧹 HELPERS
 // ==========================================
-const areNamesSimilar = (name1, name2) => {
-    if (!name1 || !name2) return false;
-    const n1 = name1.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const n2 = name2.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (n1.includes(n2) || n2.includes(n1)) return true;
-    const words1 = n1.split(' ').filter(w => w.length >= 4);
-    const words2 = n2.split(' ');
-    return words1.some(w => words2.includes(w));
-};
 
 const isInvalidContext = (text) => {
     if (!text) return false;
     const lowerText = text.toLowerCase();
+    // Filtramos cosas comerciales o irrelevantes
     const trashKeywords = ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document'];
     return trashKeywords.some(w => lowerText.includes(w));
 };
 
-const isTransportContext = (text) => {
-    if (!text) return false;
-    const lower = text.toLowerCase();
-    return (lower.includes('estacion linea') || lower.includes('metro station') || lower.includes('bus stop'));
-};
-
 // ==========================================
-// 📚 WIKIPEDIA HELPER (SOLO RESUMEN)
+// 📚 WIKIPEDIA HELPER
 // ==========================================
 const getWikipediaSummary = async (lat, lon, name) => {
     try {
-        // 1. Buscamos por coordenadas para obtener el título exacto
+        // 1. Buscamos artículo por geolocalización
         const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
         
         const searchRes = await axios.get(searchUrl, {
-            headers: { 'User-Agent': 'CastleApp/1.0' } // 👈 Vital para evitar el Error 500
+            headers: { 'User-Agent': 'CastleApp/1.0' }
         });
 
-        const geoResult = searchRes.data.query?.geosearch[0];
+        const geoResult = searchRes.data.query?.geosearch?.[0];
         
         if (geoResult) {
+            // 2. Si hay match, pedimos extracto e imagen
+            const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(geoResult.title)}&format=json&origin=*`;
+            const detailsRes = await axios.get(detailsUrl);
+            
+            const pages = detailsRes.data.query.pages;
+            const pageId = Object.keys(pages)[0];
+            const pageData = pages[pageId];
+
             return {
                 title: geoResult.title,
-                // Puedes agregar más campos si los necesitas
+                description: pageData.extract ? pageData.extract.substring(0, 200) + "..." : null,
+                imageUrl: pageData.original?.source || null
             };
         }
         return null;
@@ -73,14 +70,17 @@ const getWikipediaSummary = async (lat, lon, name) => {
 };
 
 // ==========================================
-// 🚀 CONTROLADOR PRINCIPAL (LISTA)
+// 🚀 CONTROLADOR PRINCIPAL (BÚSQUEDA EXTERNA)
 // ==========================================
 export const getGoogleLocations = async (req, res) => {
     const { lat, lon, q, search, category } = req.query;
     const textQuery = q || search;
     const selectedCategory = category || 'All';
 
-    if ((!lat || !lon) && !textQuery) return res.status(400).json({ error: 'Faltan datos de ubicación' });
+    // Validación
+    if ((!lat || !lon) && !textQuery) {
+        return res.status(400).json({ error: 'Faltan datos de ubicación o texto de búsqueda' });
+    }
 
     try {
         const url = 'https://places.googleapis.com/v1/places:searchText';
@@ -89,6 +89,7 @@ export const getGoogleLocations = async (req, res) => {
         let finalQuery = textQuery ? `${categorySearchTerm} in ${textQuery}` : categorySearchTerm;
         let requestBody = { textQuery: finalQuery, maxResultCount: 20 };
 
+        // Priorizar cercanía si hay coordenadas (Bias)
         if (lat && lon && !textQuery) {
             requestBody.locationBias = {
                 circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: 15000.0 }
@@ -104,26 +105,33 @@ export const getGoogleLocations = async (req, res) => {
         const response = await axios.post(url, requestBody, { headers });
         const googlePlaces = response.data.places || [];
 
+        // Procesamiento en paralelo (Enriquecer datos)
         const enrichedData = await Promise.all(googlePlaces.map(async (place) => {
             const pLat = place.location?.latitude;
             const pLon = place.location?.longitude;
             const pName = place.displayName?.text;
 
+            // Filtro anti-basura
+            if (isInvalidContext(pName)) return null;
+
             let finalDescription = place.editorialSummary?.text || place.formattedAddress || "Discovered via Google.";
             let finalImage = null;
             let wikiTitle = null;
 
+            // Intentar obtener imagen de Google
             if (place.photos && place.photos.length > 0) {
                 const photoReference = place.photos[0].name;
                 finalImage = `https://places.googleapis.com/v1/${photoReference}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`;
             }
 
+            // Intentar enriquecer con Wikipedia
             if (pLat && pLon) {
                 const wikiData = await getWikipediaSummary(pLat, pLon, pName);
                 if (wikiData) {
                     if (wikiData.description && wikiData.description.length > 50) {
                         finalDescription = wikiData.description;
                     }
+                    // Si Google no tiene foto pero Wiki sí, usamos Wiki
                     if (!finalImage && wikiData.imageUrl) {
                         finalImage = wikiData.imageUrl;
                     }
@@ -131,38 +139,37 @@ export const getGoogleLocations = async (req, res) => {
                 }
             }
 
-            // 🔥 PERSISTENCIA EN DB: 
-            // Si tenemos wikiTitle, intentamos actualizar el registro en la DB
-            if (wikiTitle) {
-                db('historical_locations')
-                    .where('name', pName)
-                    .update({ wiki_title: wikiTitle })
-                    .catch(err => console.log(`Nota: No se pudo actualizar wiki_title para ${pName} (posiblemente no está en la DB todavía)`));
-            }
-
             return {
-                id: place.id,
+                // --- DATOS VISUALES (Para mostrar en la lista) ---
+                id: place.id, // ID temporal (es el de Google)
                 name: pName,
                 category: selectedCategory,
                 description: finalDescription,
-                country: place.formattedAddress,
-                image_url: finalImage,
+                image_url: finalImage || 'https://via.placeholder.com/400x300?text=No+Image',
                 latitude: pLat,
                 longitude: pLon,
-                wiki_title: wikiTitle 
+                
+                // --- DATOS TÉCNICOS (Para cuando el usuario haga "Guardar") ---
+                google_place_id: place.id,  // Vital para evitar duplicados en tu DB
+                address: place.formattedAddress,
+                wiki_title: wikiTitle,
+                source: 'google' // Bandera para que el Frontend sepa mostrar el botón "Sugerir"
             };
         }));
 
-        res.json({ data: enrichedData });
+        // Eliminar nulos
+        const validResults = enrichedData.filter(item => item !== null);
+
+        res.json({ data: validResults });
 
     } catch (error) {
-        console.error("🔥 Error:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Error obteniendo lugares' });
+        console.error("🔥 Error Google Places:", error.response?.data || error.message);
+        res.status(500).json({ error: 'Error obteniendo lugares externos' });
     }
 };
 
 // ==========================================
-// 📖 NUEVO ENDPOINT: READ MORE (Detalle Completo)
+// 📖 ENDPOINT: READ MORE (Detalle Completo)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
@@ -175,6 +182,8 @@ export const getWikiFullDetails = async (req, res) => {
         const pages = response.data.query.pages;
         const pageId = Object.keys(pages)[0];
         
+        if (pageId === "-1") return res.status(404).json({ error: "Artículo no encontrado" });
+
         res.json({ full_description: pages[pageId].extract || "No details found." });
     } catch (error) {
         res.status(500).json({ error: error.message });
