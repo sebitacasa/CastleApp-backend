@@ -3,8 +3,7 @@ import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-// 👇👇👇 ACTUALIZACIÓN WIKIPEDIA 👇👇👇
-// Agregamos este objeto con headers para que Wikipedia no nos bloquee (Error 403)
+// 👇 CONFIGURACIÓN ANTI-BLOQUEO WIKIPEDIA
 const WIKI_OPTS = {
     headers: { 
         'User-Agent': 'CastleApp/1.0 (Educational Project)',
@@ -48,19 +47,19 @@ const detectCategory = (googleTypes = [], name = "", description = "") => {
 // 🏰 DICCIONARIO DE BÚSQUEDA
 // ==========================================
 const CATEGORY_QUERIES = {
-    'All': "Top tourist attractions, historical sites, museums, and castles",
-    'Castles': "Castles, palaces, fortresses, and citadels",
-    'Ruins': "Ancient ruins, archaeological sites, and historic ruins",
-    'Museums': "Museums, art galleries, and exhibitions",
-    'Statues': "Statues, sculptures, and monuments",
-    'Plaques': "Historical plaques, commemorative markers, and blue plaques",
+    'All': "tourist attractions, historical landmarks, museums, castles, parks, monuments, squares, church, towers, ruins",
+    'Castles': "Castles, palaces, fortresses, citadels",
+    'Ruins': "Ancient ruins, archaeological sites, historic ruins",
+    'Museums': "Museums, art galleries, exhibitions",
+    'Statues': "Statues, sculptures, monuments",
+    'Plaques': "Historical plaques, commemorative markers, blue plaques",
     'Busts': "Busts, sculptures of heads, historical busts",
     'Stolperstein': "Stolperstein, stumbling stones, memorial stones",
     'Historic Site': "Historical landmarks, heritage sites, ancient sites",
     'Religious': "Churches, cathedrals, temples, synagogues, mosques",
     'Towers': "Historic towers, clock towers, bell towers, observation towers",
     'Tourist': "Tourist attractions, town squares, parks, points of interest",
-    'Others': "Hidden gems, landmarks, and interesting places"
+    'Others': "Hidden gems, landmarks, interesting places"
 };
 
 // ==========================================
@@ -69,20 +68,18 @@ const CATEGORY_QUERIES = {
 const isInvalidContext = (text) => {
     if (!text) return false;
     const lowerText = text.toLowerCase();
-    const trashKeywords = ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document', 'shop', 'store', 'hotel', 'restaurant'];
-    return trashKeywords.some(w => lowerText.includes(w));
+    return ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document', 'shop', 'store', 'hotel', 'restaurant'].some(w => lowerText.includes(w));
 };
 
 const getWikipediaSummary = async (lat, lon, name) => {
     try {
         const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
-        // 👇 USAMOS WIKI_OPTS AQUÍ
         const searchRes = await axios.get(searchUrl, WIKI_OPTS);
         const geoResult = searchRes.data.query?.geosearch?.[0];
         
         if (geoResult) {
+            // AQUÍ MANTENEMOS 'exintro' PORQUE ES EL RESUMEN PARA LA TARJETA
             const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(geoResult.title)}&format=json&origin=*`;
-            // 👇 Y AQUÍ TAMBIÉN
             const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
             const pages = detailsRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
@@ -104,20 +101,19 @@ export const getLocations = async (req, res) => {
   const { lat, lon, category } = req.query;
   const targetCategory = category || 'All';
   
-  // 🌍 RADIO AMPLIO: 10km (Tal cual lo tenías)
+  // 🌍 RADIO AMPLIO: 10km
   const googleRadius = 10000; 
 
-  if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas" });
+  if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
 
   try {
     const [dbResults, googleResults] = await Promise.all([
-      fetchFromDatabase(lat, lon),
+      fetchFromDatabase(lat, lon, 20),
       fetchFromGoogle(lat, lon, googleRadius, targetCategory)
     ]);
 
     const combined = [...dbResults, ...googleResults];
 
-    // 👇 FILTRO DE CATEGORÍA
     const filtered = targetCategory === 'All' 
         ? combined 
         : combined.filter(item => item.category === targetCategory);
@@ -145,9 +141,8 @@ export const getLocations = async (req, res) => {
 };
 
 // --- Auxiliar DB ---
-async function fetchFromDatabase(lat, lon) {
+async function fetchFromDatabase(lat, lon, maxKm) {
   try {
-    // 👇 Consulta original (sin filtro estricto de distancia en WHERE)
     const query = `
       SELECT *, 
       (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
@@ -172,17 +167,15 @@ async function fetchFromDatabase(lat, lon) {
   } catch (err) { return []; }
 }
 
-// --- Auxiliar Google (GPS INTELIGENTE) ---
+// --- Auxiliar Google ---
 async function fetchFromGoogle(lat, lon, radius, category) {
   try {
     const url = 'https://places.googleapis.com/v1/places:searchText';
-    
     const queryText = CATEGORY_QUERIES[category] || CATEGORY_QUERIES['All'];
 
     const requestBody = {
       textQuery: queryText,
       maxResultCount: 20,
-      // 👇 locationBias (flexible, tal cual lo tenías)
       locationBias: {
         circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
       }
@@ -338,15 +331,15 @@ export const getGoogleLocations = async (req, res) => {
 };
 
 // ==========================================
-// 📖 4. WIKIPEDIA DETALLE (FIXED)
+// 📖 4. WIKIPEDIA DETALLE (FIXED FULL CONTENT)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
     try {
-        const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+        // 👇 HE QUITADO 'exintro' para que traiga TODO el contenido
+        const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext&titles=${encodeURIComponent(title)}&format=json&origin=*`;
         
-        // 👇 USO DE WIKI_OPTS (Corrección para el 403)
         const response = await axios.get(url, WIKI_OPTS);
         
         const pages = response.data.query.pages;
