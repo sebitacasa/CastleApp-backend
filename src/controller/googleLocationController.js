@@ -3,38 +3,41 @@ import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
+// 👇 CONFIGURACIÓN ANTI-BLOQUEO WIKIPEDIA (NUEVO)
+const WIKI_OPTS = {
+    headers: { 
+        'User-Agent': 'CastleApp/1.0 (Educational Project)',
+        'Api-User-Agent': 'CastleApp/1.0'
+    },
+    timeout: 5000
+};
+
 // ==========================================
-// 🧠 LÓGICA DE CLASIFICACIÓN (Mapeo Inteligente)
+// 🧠 LÓGICA DE CLASIFICACIÓN
 // ==========================================
 const detectCategory = (googleTypes = [], name = "", description = "") => {
     const text = (name + " " + description).toLowerCase();
     const types = (googleTypes || []).map(t => t.toLowerCase());
 
-    // 1. PALABRAS CLAVE (Orden de prioridad)
     if (text.includes("stolperstein")) return "Stolperstein";
     if (text.includes("plaque") || text.includes("placa") || text.includes("marker")) return "Plaques";
     if (text.includes("bust of") || text.includes("busto")) return "Busts";
     
-    // Castillos antes que Torres
     if (text.includes("castle") || text.includes("castillo") || text.includes("fortress") || text.includes("palace") || text.includes("palacio") || text.includes("citadel")) return "Castles";
     
     if (text.includes("ruin") || text.includes("ruinas") || text.includes("archaeological")) return "Ruins";
     if (text.includes("museum") || text.includes("museo") || text.includes("gallery") || text.includes("galería") || text.includes("exhibition")) return "Museums";
     
-    // Iglesias/Templos
     if (text.includes("church") || text.includes("iglesia") || text.includes("cathedral") || text.includes("catedral") || text.includes("temple") || text.includes("synagogue") || text.includes("mosque")) return "Religious";
     
-    // Torres (después de castillos e iglesias para evitar falsos positivos)
     if (text.includes("tower") || text.includes("torre") || text.includes("clock") || text.includes("reloj") || text.includes("bell")) return "Towers";
 
-    // 2. TIPOS DE GOOGLE
     if (types.includes("castle") || types.includes("fortress")) return "Castles";
     if (types.includes("museum") || types.includes("art_gallery")) return "Museums";
     if (types.includes("church") || types.includes("place_of_worship") || types.includes("hindu_temple") || types.includes("synagogue") || types.includes("mosque")) return "Religious";
     if (types.includes("monument") || types.includes("sculpture") || types.includes("statue")) return "Statues";
     if (types.includes("historical_landmark") || types.includes("historic_site")) return "Historic Site";
     
-    // 3. Defaults
     if (types.includes("park") || types.includes("town_square") || types.includes("tourist_attraction") || types.includes("point_of_interest")) return "Tourist";
 
     return "Others";
@@ -72,12 +75,14 @@ const isInvalidContext = (text) => {
 const getWikipediaSummary = async (lat, lon, name) => {
     try {
         const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
-        const searchRes = await axios.get(searchUrl, { timeout: 3000 });
+        // 👇 USO DE WIKI_OPTS
+        const searchRes = await axios.get(searchUrl, WIKI_OPTS);
         const geoResult = searchRes.data.query?.geosearch?.[0];
         
         if (geoResult) {
             const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(geoResult.title)}&format=json&origin=*`;
-            const detailsRes = await axios.get(detailsUrl, { timeout: 3000 });
+            // 👇 USO DE WIKI_OPTS
+            const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
             const pages = detailsRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
             const pageData = pages[pageId];
@@ -98,7 +103,7 @@ export const getLocations = async (req, res) => {
   const { lat, lon, category } = req.query;
   const targetCategory = category || 'All';
   
-  // 🌍 RADIO AMPLIO: 10km
+  // 🌍 RADIO AMPLIO: 10km (Tal como pediste mantener)
   const googleRadius = 10000; 
 
   if (!lat || !lon) {
@@ -108,7 +113,7 @@ export const getLocations = async (req, res) => {
   try {
     const [dbResults, googleResults] = await Promise.all([
       fetchFromDatabase(lat, lon),
-      fetchFromGoogle(lat, lon, googleRadius, targetCategory) // Pasamos targetCategory para optimizar query de Google
+      fetchFromGoogle(lat, lon, googleRadius, targetCategory)
     ]);
 
     const combined = [...dbResults, ...googleResults];
@@ -143,6 +148,7 @@ export const getLocations = async (req, res) => {
 // --- Auxiliar DB ---
 async function fetchFromDatabase(lat, lon) {
   try {
+    // Consulta original sin filtro estricto de distancia en WHERE
     const query = `
       SELECT *, 
       (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
@@ -162,7 +168,6 @@ async function fetchFromDatabase(lat, lon) {
       source: 'db',      
       is_yours: true,
       country: 'Community',
-      // Clasificamos lo de la DB también
       category: detectCategory([], row.name, row.description) 
     }));
   } catch (err) { return []; }
@@ -174,12 +179,12 @@ async function fetchFromGoogle(lat, lon, radius, category) {
     const url = 'https://places.googleapis.com/v1/places:searchText';
     
     // 👇 ELEGIMOS LA QUERY SEGÚN LA CATEGORÍA
-    // Si el usuario pide "Castles", buscamos solo castillos. Si pide "All", buscamos de todo.
     const queryText = CATEGORY_QUERIES[category] || CATEGORY_QUERIES['All'];
 
     const requestBody = {
       textQuery: queryText,
       maxResultCount: 20,
+      // Usamos locationBias (flexible) tal como pediste
       locationBias: {
         circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
       }
@@ -227,7 +232,7 @@ async function fetchFromGoogle(lat, lon, radius, category) {
             latitude: pLat,
             longitude: pLon,
             image_url: finalImage || 'https://via.placeholder.com/400x300',
-            category: detectedCat, // ✅ Categoría asignada automáticamente
+            category: detectedCat,
             source: 'google',
             google_place_id: p.id,
             address: p.formattedAddress,
@@ -317,13 +322,12 @@ export const getGoogleLocations = async (req, res) => {
                 shortAddress = shortAddress.split(',').slice(-2).join(',').trim();
             }
 
-            // 👇 AQUI CLASIFICAMOS EL LUGAR (Igual que en GPS)
             const detectedCat = detectCategory(p.types, pName, finalDesc);
 
             return {
                 id: p.id, name: pName, description: finalDesc, latitude: pLat, longitude: pLon,
                 image_url: finalImage || 'https://via.placeholder.com/400x300',
-                category: detectedCat, // ✅ Categoría asignada automáticamente
+                category: detectedCat,
                 source: 'google', google_place_id: p.id,
                 address: p.formattedAddress, country: shortAddress, wiki_title: wikiTitle
             };
@@ -344,7 +348,10 @@ export const getWikiFullDetails = async (req, res) => {
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
     try {
         const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-        const response = await axios.get(url);
+        
+        // 👇 USO DE WIKI_OPTS (Corrección para el 403)
+        const response = await axios.get(url, WIKI_OPTS);
+        
         const pages = response.data.query.pages;
         const pageId = Object.keys(pages)[0];
         if (pageId === "-1") return res.status(404).json({ error: "No encontrado" });
