@@ -3,7 +3,8 @@ import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-// 👇 CONFIGURACIÓN ANTI-BLOQUEO WIKIPEDIA (NUEVO)
+// 👇👇👇 ACTUALIZACIÓN WIKIPEDIA 👇👇👇
+// Agregamos este objeto con headers para que Wikipedia no nos bloquee (Error 403)
 const WIKI_OPTS = {
     headers: { 
         'User-Agent': 'CastleApp/1.0 (Educational Project)',
@@ -47,19 +48,19 @@ const detectCategory = (googleTypes = [], name = "", description = "") => {
 // 🏰 DICCIONARIO DE BÚSQUEDA
 // ==========================================
 const CATEGORY_QUERIES = {
-    'All': "tourist attractions, historical landmarks, museums, castles, parks, monuments, squares, church, towers, ruins",
-    'Castles': "Castles, palaces, fortresses, citadels",
-    'Ruins': "Ancient ruins, archaeological sites, historic ruins",
-    'Museums': "Museums, art galleries, exhibitions",
-    'Statues': "Statues, sculptures, monuments",
-    'Plaques': "Historical plaques, commemorative markers, blue plaques",
+    'All': "Top tourist attractions, historical sites, museums, and castles",
+    'Castles': "Castles, palaces, fortresses, and citadels",
+    'Ruins': "Ancient ruins, archaeological sites, and historic ruins",
+    'Museums': "Museums, art galleries, and exhibitions",
+    'Statues': "Statues, sculptures, and monuments",
+    'Plaques': "Historical plaques, commemorative markers, and blue plaques",
     'Busts': "Busts, sculptures of heads, historical busts",
     'Stolperstein': "Stolperstein, stumbling stones, memorial stones",
     'Historic Site': "Historical landmarks, heritage sites, ancient sites",
     'Religious': "Churches, cathedrals, temples, synagogues, mosques",
     'Towers': "Historic towers, clock towers, bell towers, observation towers",
     'Tourist': "Tourist attractions, town squares, parks, points of interest",
-    'Others': "Hidden gems, landmarks, interesting places"
+    'Others': "Hidden gems, landmarks, and interesting places"
 };
 
 // ==========================================
@@ -75,13 +76,13 @@ const isInvalidContext = (text) => {
 const getWikipediaSummary = async (lat, lon, name) => {
     try {
         const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=1&format=json&origin=*`;
-        // 👇 USO DE WIKI_OPTS
+        // 👇 USAMOS WIKI_OPTS AQUÍ
         const searchRes = await axios.get(searchUrl, WIKI_OPTS);
         const geoResult = searchRes.data.query?.geosearch?.[0];
         
         if (geoResult) {
             const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(geoResult.title)}&format=json&origin=*`;
-            // 👇 USO DE WIKI_OPTS
+            // 👇 Y AQUÍ TAMBIÉN
             const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
             const pages = detailsRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
@@ -97,18 +98,16 @@ const getWikipediaSummary = async (lat, lon, name) => {
 };
 
 // ==========================================
-// 🗺️ 1. MAPA HÍBRIDO (GET /) - GPS
+// 🗺️ 1. MAPA HÍBRIDO (GET /)
 // ==========================================
 export const getLocations = async (req, res) => {
   const { lat, lon, category } = req.query;
   const targetCategory = category || 'All';
   
-  // 🌍 RADIO AMPLIO: 10km (Tal como pediste mantener)
+  // 🌍 RADIO AMPLIO: 10km (Tal cual lo tenías)
   const googleRadius = 10000; 
 
-  if (!lat || !lon) {
-    return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
-  }
+  if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas" });
 
   try {
     const [dbResults, googleResults] = await Promise.all([
@@ -118,7 +117,7 @@ export const getLocations = async (req, res) => {
 
     const combined = [...dbResults, ...googleResults];
 
-    // 👇 FILTRO FINAL: Aseguramos que lo que mostramos coincida con la categoría solicitada
+    // 👇 FILTRO DE CATEGORÍA
     const filtered = targetCategory === 'All' 
         ? combined 
         : combined.filter(item => item.category === targetCategory);
@@ -148,7 +147,7 @@ export const getLocations = async (req, res) => {
 // --- Auxiliar DB ---
 async function fetchFromDatabase(lat, lon) {
   try {
-    // Consulta original sin filtro estricto de distancia en WHERE
+    // 👇 Consulta original (sin filtro estricto de distancia en WHERE)
     const query = `
       SELECT *, 
       (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
@@ -173,18 +172,17 @@ async function fetchFromDatabase(lat, lon) {
   } catch (err) { return []; }
 }
 
-// --- Auxiliar Google (GPS INTELIGENTE + WIKI) ---
+// --- Auxiliar Google (GPS INTELIGENTE) ---
 async function fetchFromGoogle(lat, lon, radius, category) {
   try {
     const url = 'https://places.googleapis.com/v1/places:searchText';
     
-    // 👇 ELEGIMOS LA QUERY SEGÚN LA CATEGORÍA
     const queryText = CATEGORY_QUERIES[category] || CATEGORY_QUERIES['All'];
 
     const requestBody = {
       textQuery: queryText,
       maxResultCount: 20,
-      // Usamos locationBias (flexible) tal como pediste
+      // 👇 locationBias (flexible, tal cual lo tenías)
       locationBias: {
         circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
       }
@@ -222,7 +220,6 @@ async function fetchFromGoogle(lat, lon, radius, category) {
             shortAddress = shortAddress.split(',').slice(-2).join(',').trim();
         }
 
-        // 👇 AQUI CLASIFICAMOS EL LUGAR
         const detectedCat = detectCategory(p.types, pName, finalDesc);
 
         return {
@@ -341,7 +338,7 @@ export const getGoogleLocations = async (req, res) => {
 };
 
 // ==========================================
-// 📖 4. WIKIPEDIA DETALLE
+// 📖 4. WIKIPEDIA DETALLE (FIXED)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
@@ -356,7 +353,10 @@ export const getWikiFullDetails = async (req, res) => {
         const pageId = Object.keys(pages)[0];
         if (pageId === "-1") return res.status(404).json({ error: "No encontrado" });
         res.json({ full_description: pages[pageId].extract });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error("Wiki Error:", error.message);
+        res.status(500).json({ error: error.message }); 
+    }
 };
 
 // ==========================================
