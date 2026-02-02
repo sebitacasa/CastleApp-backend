@@ -111,19 +111,20 @@ async function fetchFromDatabase(lat, lon) {
 // --- Auxiliar Google (GPS - Búsqueda por Cercanía) ---
 async function fetchFromGoogle(lat, lon, radius) {
   try {
-    const url = 'https://places.googleapis.com/v1/places:searchNearby';
+    // 🧠 TRUCO: En vez de 'searchNearby' (estricto), usamos 'searchText' (inteligente)
+    // Esto hace que funcione EXACTAMENTE igual que tu buscador de ciudades.
+    const url = 'https://places.googleapis.com/v1/places:searchText';
     
-    // 👇 AQUÍ ESTÁ LA MAGIA: Pedimos TODO TIPO de lugares interesantes
     const requestBody = {
-      includedTypes: [
-          "castle", "fortress", "historical_landmark", "museum", "ruins", // Lo clásico
-          "art_gallery", "church", "place_of_worship", "hindu_temple", "mosque", "synagogue", // Religioso / Arte
-          "monument", "sculpture", "tourist_attraction", "town_square", "park", // Urbano
-          "library", "city_hall", "embassy" // Edificios importantes
-      ],
+      // Le pedimos una búsqueda amplia genérica
+      textQuery: "tourist attractions, historical landmarks, museums, castles, parks, monuments",
       maxResultCount: 20,
-      locationRestriction: {
-        circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
+      // Pero forzamos a que mire DONDE TÚ ESTÁS (Location Bias)
+      locationBias: {
+        circle: { 
+            center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, 
+            radius: radius // 10km
+        }
       }
     };
 
@@ -135,30 +136,24 @@ async function fetchFromGoogle(lat, lon, radius) {
 
     const response = await axios.post(url, requestBody, { headers });
     const places = response.data.places || [];
+    
+    return places.map(p => ({
+        id: p.id, 
+        name: p.displayName?.text, 
+        description: p.editorialSummary?.text || p.formattedAddress,
+        latitude: p.location.latitude, 
+        longitude: p.location.longitude,
+        // Construimos la URL de la foto directamente
+        image_url: p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null,
+        category: 'Google Explorer', 
+        source: 'google'
+    }));
 
-    return places.map(place => {
-      let finalImage = null;
-      if (place.photos && place.photos.length > 0) {
-        finalImage = `https://places.googleapis.com/v1/${place.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600`;
-      }
-      return {
-        id: place.id,
-        name: place.displayName?.text,
-        description: place.editorialSummary?.text || place.formattedAddress,
-        latitude: place.location.latitude,
-        longitude: place.location.longitude,
-        image_url: finalImage || 'https://via.placeholder.com/400x300',
-        category: 'Google Explorer',
-        source: 'google',
-        google_place_id: place.id
-      };
-    });
   } catch (err) {
-    console.error("Error Google Nearby:", err.response?.data || err.message);
+    console.error("🔥 ERROR GOOGLE API:", err.response?.data || err.message);
     return [];
   }
 }
-
 // ==========================================
 // 📥 2. SUGERIR / GUARDAR (POST /suggest)
 // ==========================================
