@@ -166,33 +166,11 @@ export const deleteUser = async (req, res) => {
 };
 
 export const createTestUser = async (req, res) => {
-    const { email, name, photo } = req.body;
-
     try {
-        // 1. Revisar si ya existe
-        const check = await db.raw('SELECT * FROM users WHERE email = ?', [email]);
-        if (check.rows.length > 0) {
-            return res.status(200).json({ 
-                message: "Usuario ya existía", 
-                user: check.rows[0] 
-            });
-        }
-
-        // 2. Crear usuario nuevo (con un google_id falso para pruebas)
-        const newUser = await db.raw(
-            `INSERT INTO users (email, username, image_url, google_id)  
-             VALUES (?, ?, ?, 'test_manual_id') 
-             RETURNING *`,
-            [email, name, photo || 'https://via.placeholder.com/150']
-        );
-
-        res.status(201).json({ 
-            message: "Usuario de prueba creado", 
-            user: newUser.rows[0] 
-        });
-
+        // 👇 Esto nos dirá EXACTAMENTE qué columnas tiene la tabla 'users'
+        const tableInfo = await db.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'");
+        res.json(tableInfo.rows); 
     } catch (error) {
-        console.error(error);
         res.status(500).json({ error: error.message });
     }
 };
