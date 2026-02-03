@@ -242,21 +242,35 @@ async function fetchFromGoogle(lat, lon, radius, category) {
 // ==========================================
 // 📥 2. SUGERIR / GUARDAR (POST /suggest)
 // ==========================================
+// src/controllers/locationsController.js
+
 export const suggestLocation = async (req, res) => {
+  // 1. Recibimos los datos (fíjate que aquí ya se llaman latitude y longitude)
   const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
+
   try {
     if (google_place_id) {
        const check = await db.raw('SELECT id FROM historical_locations WHERE google_place_id = ?', [google_place_id]);
        if (check.rows.length > 0) return res.status(400).json({ error: "Ya registrado." });
     }
+
+    // 2. CORRECCIÓN AQUÍ 👇
+    // Cambiamos "lat, lon" por "latitude, longitude" para que coincida con tu base de datos
     const newLoc = await db.raw(
-      `INSERT INTO historical_locations (name, description, lat, lon, image_url, created_by_user_id, is_approved, google_place_id) VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) RETURNING *`,
+      `INSERT INTO historical_locations 
+       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
+       VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
+       RETURNING *`,
       [name, description, latitude, longitude, image_url, user_id, google_place_id]
     );
-    res.json({ message: "Recibido", location: newLoc.rows[0] });
-  } catch (err) { res.status(500).json({ error: "Error guardar." }); }
-};
 
+    res.json({ message: "Recibido", location: newLoc.rows[0] });
+
+  } catch (err) { 
+    console.error("Error al guardar:", err.message); // Agregué el log para ver el error real en consola
+    res.status(500).json({ error: "Error al guardar el lugar: " + err.message }); 
+  }
+};
 // ==========================================
 // 🔭 3. BÚSQUEDA DE TEXTO (GET /external/search)
 // ==========================================
