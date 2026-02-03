@@ -166,11 +166,34 @@ export const deleteUser = async (req, res) => {
 };
 
 export const createTestUser = async (req, res) => {
+    const { email, name, photo } = req.body;
+
     try {
-        // 👇 Esto nos dirá EXACTAMENTE qué columnas tiene la tabla 'users'
-        const tableInfo = await db.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'");
-        res.json(tableInfo.rows); 
+        // 1. Revisar si ya existe
+        const check = await db.raw('SELECT * FROM users WHERE email = ?', [email]);
+        if (check.rows.length > 0) {
+            return res.status(200).json({ 
+                message: "El usuario ya existe, aquí tienes su ID:", 
+                user: check.rows[0] 
+            });
+        }
+
+        // 2. Crear usuario nuevo usando los nombres REALES de tus columnas
+        // Usamos: username, avatar_url y una contraseña dummy
+        const newUser = await db.raw(
+            `INSERT INTO users (email, username, avatar_url, password) 
+             VALUES (?, ?, ?, 'password_prueba_123') 
+             RETURNING *`,
+            [email, name, photo || 'https://via.placeholder.com/150']
+        );
+
+        res.status(201).json({ 
+            message: "Usuario de prueba creado con éxito", 
+            user: newUser.rows[0] 
+        });
+
     } catch (error) {
+        console.error("Error al crear usuario:", error);
         res.status(500).json({ error: error.message });
     }
 };
