@@ -180,7 +180,7 @@ export const createTestUser = async (req, res) => {
 
         // 2. Crear usuario nuevo (con un google_id falso para pruebas)
         const newUser = await db.raw(
-            `INSERT INTO users (email, name, image_url, google_id) 
+            `INSERT INTO users (email, username, image_url, google_id)  
              VALUES (?, ?, ?, 'test_manual_id') 
              RETURNING *`,
             [email, name, photo || 'https://via.placeholder.com/150']
