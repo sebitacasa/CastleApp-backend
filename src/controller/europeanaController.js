@@ -325,6 +325,46 @@ const processImagesInBatches = async (elements) => {
     }
 };
 
+// Función auxiliar: Busca en TU DB usando la fórmula de Haversine (Matemática pura)
+const fetchFromDatabase = async (lat, lon, radiusKm = 20) => {
+    try {
+        const query = `
+            SELECT *, 
+            ( 6371 * acos( cos( radians(?) ) * cos( radians( latitude ) ) 
+            * cos( radians( longitude ) - radians(?) ) + sin( radians(?) ) 
+            * sin( radians( latitude ) ) ) ) AS distance 
+            FROM historical_locations 
+            WHERE is_approved = TRUE
+            AND ( 6371 * acos( cos( radians(?) ) * cos( radians( latitude ) ) 
+            * cos( radians( longitude ) - radians(?) ) + sin( radians(?) ) 
+            * sin( radians( latitude ) ) ) ) < ?
+            ORDER BY distance ASC
+            LIMIT 50;
+        `;
+
+        // Pasamos latitud y longitud varias veces porque la fórmula lo requiere
+        const result = await db.raw(query, [lat, lon, lat, lat, lon, lat, radiusKm]);
+        
+        // Formateamos los datos para que el Frontend no note la diferencia con Google
+        return result.rows.map(row => ({
+            id: `db-${row.id}`, // Le ponemos un prefijo para que el key no choque
+            name: row.name,
+            description: row.description,
+            latitude: row.latitude,
+            longitude: row.longitude,
+            image_url: row.image_url,
+            rating: 5.0, // Tus lugares son VIP, les ponemos 5 estrellas
+            user_ratings_total: 1,
+            category: 'Community', 
+            source: 'db' // Marca de agua
+        }));
+
+    } catch (error) {
+        console.error("Error buscando en DB:", error);
+        return []; // Si falla, devolvemos array vacío para no romper todo
+    }
+};
+
 // ==========================================
 // 4. EL PORTERO
 // ==========================================
