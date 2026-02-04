@@ -141,6 +141,17 @@ export const getLocations = async (req, res) => {
 
 // --- Auxiliar DB ---
 async function fetchFromDatabase(lat, lon, maxKm = 20) {
+  // 1. VALIDACIÓN DE SEGURIDAD 🛡️
+  // Si lat o lon son undefined, null, o no son números, NO ejecutamos SQL.
+  if (!lat || !lon || isNaN(parseFloat(lat)) || isNaN(parseFloat(lon))) {
+      console.warn("⚠️ fetchFromDatabase: Coordenadas inválidas recibidas:", { lat, lon });
+      return []; // Retornamos array vacío para no romper la app
+  }
+
+  // 2. CONVERSIÓN A NÚMEROS REALES
+  const latNum = parseFloat(lat);
+  const lonNum = parseFloat(lon);
+
   try {
     const query = `
       SELECT *, 
@@ -158,7 +169,8 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) {
       LIMIT 20
     `;
 
-    const r = await db.raw(query, [lat, lon, lat, lat, lon, lat, maxKm]);
+    // Pasamos los números ya limpios (latNum, lonNum)
+    const r = await db.raw(query, [latNum, lonNum, latNum, latNum, lonNum, latNum, maxKm]);
     
     return r.rows.map(row => ({
       id: row.id.toString(),
@@ -169,15 +181,11 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) {
       image_url: row.image_url,
       source: 'db',      
       is_yours: true,
-      
-      // 👇 AQUÍ ESTÁ EL CAMBIO:
-      // Usamos el campo location_text. Si es null (para lugares viejos), mostramos 'Community'
       country: row.location_text || 'Community', 
-      
       category: row.category || 'Others' 
     }));
   } catch (err) { 
-    console.error("Error DB:", err); 
+    console.error("🔥 Error CRÍTICO en DB:", err.message); 
     return []; 
   }
 }
