@@ -259,7 +259,7 @@ export const suggestLocation = async (req, res) => {
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
        (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
-       VALUES (?, ?, ?, ?, ?, ?, FALSE, ?) 
+       VALUES (?, ?, ?, ?, ?, ?, TRUE, ?) 
        RETURNING *`,
       [name, description, latitude, longitude, image_url, user_id, google_place_id]
     );
