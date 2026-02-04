@@ -140,9 +140,8 @@ export const getLocations = async (req, res) => {
 };
 
 // --- Auxiliar DB ---
-async function fetchFromDatabase(lat, lon, maxKm = 20) { // Ponemos 20km por defecto
+async function fetchFromDatabase(lat, lon, maxKm = 20) {
   try {
-    // 👇 Fíjate que ahora usamos 'latitude' y 'longitude' (los nombres reales de tu tabla)
     const query = `
       SELECT *, 
       (6371 * acos(
@@ -154,31 +153,31 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) { // Ponemos 20km por def
       AND (6371 * acos(
         cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + 
         sin(radians(?)) * sin(radians(latitude))
-      )) < ?  -- 👈 Agregué esto para que respete el radio máximo
+      )) < ? 
       ORDER BY distance ASC 
       LIMIT 20
     `;
 
-    // Pasamos los parámetros en orden para reemplazar los signos de pregunta (?)
-    // lat, lon, lat (para el select) + lat, lon, lat (para el where) + maxKm
     const r = await db.raw(query, [lat, lon, lat, lat, lon, lat, maxKm]);
     
     return r.rows.map(row => ({
       id: row.id.toString(),
       name: row.name,
       description: row.description,
-      // 👇 Aquí también corregimos para leer la propiedad correcta del objeto row
       latitude: parseFloat(row.latitude), 
       longitude: parseFloat(row.longitude),
       image_url: row.image_url,
       source: 'db',      
       is_yours: true,
-      country: 'Community',
-      // Si tienes la función detectCategory úsala, sino ponle un string fijo para probar
-      category: 'Community' 
+      
+      // 👇 AQUÍ ESTÁ EL CAMBIO:
+      // Usamos el campo location_text. Si es null (para lugares viejos), mostramos 'Community'
+      country: row.location_text || 'Community', 
+      
+      category: row.category || 'Others' 
     }));
   } catch (err) { 
-    console.error("Error DB:", err); // Log para ver si falla algo más
+    console.error("Error DB:", err); 
     return []; 
   }
 }
@@ -262,8 +261,8 @@ async function fetchFromGoogle(lat, lon, radius, category) {
 // src/controllers/locationsController.js
 
 export const suggestLocation = async (req, res) => {
-  // 1. Recibimos los datos (fíjate que aquí ya se llaman latitude y longitude)
-  const { name, description, latitude, longitude, image_url, user_id, google_place_id } = req.body;
+  // Recibimos 'location_text'
+  const { name, description, latitude, longitude, image_url, user_id, google_place_id, category, location_text } = req.body;
 
   try {
     if (google_place_id) {
@@ -271,21 +270,23 @@ export const suggestLocation = async (req, res) => {
        if (check.rows.length > 0) return res.status(400).json({ error: "Ya registrado." });
     }
 
-    // 2. CORRECCIÓN AQUÍ 👇
-    // Cambiamos "lat, lon" por "latitude, longitude" para que coincida con tu base de datos
+    const finalCategory = category || 'Others';
+    // Si no llega location_text, guardamos un default
+    const finalLocationText = location_text || 'Unknown Location';
+
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
-       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id) 
-       VALUES (?, ?, ?, ?, ?, ?, TRUE, ?) 
+       (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id, category, location_text) 
+       VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?) 
        RETURNING *`,
-      [name, description, latitude, longitude, image_url, user_id, google_place_id]
+      [name, description, latitude, longitude, image_url, user_id, google_place_id, finalCategory, finalLocationText]
     );
 
-    res.json({ message: "Recibido", location: newLoc.rows[0] });
+    res.json({ message: "Lugar creado", location: newLoc.rows[0] });
 
   } catch (err) { 
-    console.error("Error al guardar:", err.message); // Agregué el log para ver el error real en consola
-    res.status(500).json({ error: "Error al guardar el lugar: " + err.message }); 
+    console.error("Error al guardar:", err.message);
+    res.status(500).json({ error: "Error al guardar: " + err.message }); 
   }
 };
 // ==========================================
