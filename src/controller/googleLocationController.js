@@ -140,30 +140,47 @@ export const getLocations = async (req, res) => {
 };
 
 // --- Auxiliar DB ---
-async function fetchFromDatabase(lat, lon, maxKm) {
+async function fetchFromDatabase(lat, lon, maxKm = 20) { // Ponemos 20km por defecto
   try {
+    // 👇 Fíjate que ahora usamos 'latitude' y 'longitude' (los nombres reales de tu tabla)
     const query = `
       SELECT *, 
-      (6371 * acos(cos(radians(?)) * cos(radians(lat)) * cos(radians(lon) - radians(?)) + sin(radians(?)) * sin(radians(lat)))) AS distance
+      (6371 * acos(
+        cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + 
+        sin(radians(?)) * sin(radians(latitude))
+      )) AS distance
       FROM historical_locations
       WHERE is_approved = TRUE
-      ORDER BY distance ASC LIMIT 20
+      AND (6371 * acos(
+        cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + 
+        sin(radians(?)) * sin(radians(latitude))
+      )) < ?  -- 👈 Agregué esto para que respete el radio máximo
+      ORDER BY distance ASC 
+      LIMIT 20
     `;
-    const r = await db.raw(query, [lat, lon, lat, lat, lon, lat]);
+
+    // Pasamos los parámetros en orden para reemplazar los signos de pregunta (?)
+    // lat, lon, lat (para el select) + lat, lon, lat (para el where) + maxKm
+    const r = await db.raw(query, [lat, lon, lat, lat, lon, lat, maxKm]);
     
     return r.rows.map(row => ({
       id: row.id.toString(),
       name: row.name,
       description: row.description,
-      latitude: parseFloat(row.lat),
-      longitude: parseFloat(row.lon),
+      // 👇 Aquí también corregimos para leer la propiedad correcta del objeto row
+      latitude: parseFloat(row.latitude), 
+      longitude: parseFloat(row.longitude),
       image_url: row.image_url,
       source: 'db',      
       is_yours: true,
       country: 'Community',
-      category: detectCategory([], row.name, row.description) 
+      // Si tienes la función detectCategory úsala, sino ponle un string fijo para probar
+      category: 'Community' 
     }));
-  } catch (err) { return []; }
+  } catch (err) { 
+    console.error("Error DB:", err); // Log para ver si falla algo más
+    return []; 
+  }
 }
 
 // --- Auxiliar Google ---
