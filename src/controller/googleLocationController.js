@@ -261,25 +261,37 @@ async function fetchFromGoogle(lat, lon, radius, category) {
 // src/controllers/locationsController.js
 
 export const suggestLocation = async (req, res) => {
-  // Recibimos 'location_text'
   const { name, description, latitude, longitude, image_url, user_id, google_place_id, category, location_text } = req.body;
 
   try {
+    // Validación: Si viene un google_place_id, verificamos duplicados
     if (google_place_id) {
        const check = await db.raw('SELECT id FROM historical_locations WHERE google_place_id = ?', [google_place_id]);
        if (check.rows.length > 0) return res.status(400).json({ error: "Ya registrado." });
     }
 
     const finalCategory = category || 'Others';
-    // Si no llega location_text, guardamos un default
     const finalLocationText = location_text || 'Unknown Location';
+    
+    // 👇 CORRECCIÓN AQUÍ: Si es undefined, lo forzamos a null
+    const finalGoogleId = google_place_id || null; 
 
     const newLoc = await db.raw(
       `INSERT INTO historical_locations 
        (name, description, latitude, longitude, image_url, created_by_user_id, is_approved, google_place_id, category, location_text) 
        VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?) 
        RETURNING *`,
-      [name, description, latitude, longitude, image_url, user_id, google_place_id, finalCategory, finalLocationText]
+      [
+        name, 
+        description, 
+        latitude, 
+        longitude, 
+        image_url, 
+        user_id, 
+        finalGoogleId, // <--- Usamos la variable segura aquí (índice 6)
+        finalCategory, 
+        finalLocationText
+      ]
     );
 
     res.json({ message: "Lugar creado", location: newLoc.rows[0] });
