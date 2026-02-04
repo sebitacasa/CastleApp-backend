@@ -10,29 +10,38 @@ const SECRET_KEY = process.env.JWT_SECRET || 'mi_secreto_super_seguro';
 
 // --- LOGIN CON GOOGLE (Backend) ---
 export const googleLogin = async (req, res) => {
-    const { token } = req.body; // El token que recibimos del frontend
+    const { token } = req.body; 
 
     if (!token) {
         return res.status(400).json({ message: 'No se proporcionó token de Google' });
     }
 
     try {
-        // 1. Validar el token con los servidores de Google
-        const googleResponse = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
+        // 👇 CAMBIO CLAVE AQUÍ 👇
+        // En lugar de llamar a userinfo con Bearer, llamamos al endpoint de validación de ID Token
+        const googleResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
 
         if (!googleResponse.ok) {
+            // Si el token es viejo o falso, Google devuelve error aquí
+            const errorData = await googleResponse.json();
+            console.error("Error validando token Google:", errorData);
             return res.status(400).json({ message: 'Token de Google inválido o expirado' });
         }
 
         const googleUser = await googleResponse.json();
         
-        // Google devuelve: sub, name, given_name, family_name, picture, email, email_verified
-        const { email, name, picture, email_verified } = googleUser;
+        // 🔍 DEBUG: Ver qué devuelve Google (opcional)
+        // console.log("Google User Data:", googleUser);
 
-        // 2. Seguridad: Verificar que el email sea legítimo
-        if (!email_verified) {
+        // Extraemos los datos. 
+        // NOTA: A veces 'name' no viene en tokeninfo, usamos 'given_name' si no hay 'name'.
+        const { email, sub, picture } = googleUser;
+        const name = googleUser.name || googleUser.given_name; 
+        
+        // Corrección de seguridad: email_verified a veces viene como string "true"
+        const isVerified = googleUser.email_verified === true || googleUser.email_verified === "true";
+
+        if (!isVerified) {
             return res.status(403).json({ message: 'El correo de Google no está verificado.' });
         }
 
@@ -40,40 +49,37 @@ export const googleLogin = async (req, res) => {
         let user = await db('users').where({ email }).first();
 
         if (!user) {
-            // A) NO EXISTE: Lo creamos (Registro Automático)
-            
-            // Generamos una contraseña basura segura para cumplir con la DB (NOT NULL)
+            // A) CREAR USUARIO
             const randomPassword = crypto.randomBytes(16).toString('hex');
             const salt = await bcrypt.genSalt(10);
             const passwordHash = await bcrypt.hash(randomPassword, salt);
 
             const [newUser] = await db('users').insert({
-                username: name, // Ojo: Si 'username' es UNIQUE en tu DB, esto podría fallar si hay dos "Sebastian". 
+                username: name, 
                 email: email,
                 avatar_url: picture,
-                password_hash: passwordHash, // Guardamos la contraseña generada
-                // google_id: googleUser.sub // (Opcional) Si tienes esta columna, es bueno guardarla
+                password_hash: passwordHash, 
+                // google_id: sub // Recomendado guardar el ID único de Google (sub)
             }).returning(['id', 'username', 'email', 'avatar_url']);
             
             user = newUser;
         } else {
-            // B) SI EXISTE: Actualizamos la foto por si la cambió
+            // B) ACTUALIZAR FOTO
             await db('users')
                 .where({ id: user.id })
                 .update({ avatar_url: picture });
             
-            // Actualizamos el objeto user local para devolver la foto nueva
             user.avatar_url = picture;
         }
 
-        // 4. Generar NUESTRO token (JWT) para que la app lo use
+        // 4. Generar NUESTRO token (JWT)
         const appToken = jwt.sign(
             { id: user.id, email: user.email }, 
-            SECRET_KEY, // Usamos la constante unificada
+            SECRET_KEY, 
             { expiresIn: '7d' }
         );
 
-        // 5. Responder al Frontend
+        // 5. Responder
         res.json({
             message: 'Login con Google exitoso',
             user: { 
@@ -178,3 +184,37 @@ export const createTestUser = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+
+// export const createTestUser = async (req, res) => {
+//     const { email, name, photo } = req.body;
+
+//     try {
+//         // 1. Revisar si ya existe
+//         const check = await db.raw('SELECT * FROM users WHERE email = ?', [email]);
+//         if (check.rows.length > 0) {
+//             return res.status(200).json({ 
+//                 message: "El usuario ya existe, aquí tienes su ID:", 
+//                 user: check.rows[0] 
+//             });
+//         }
+
+//         // 2. Crear usuario nuevo usando los nombres REALES de tus columnas
+//         // Usamos: username, avatar_url y una contraseña dummy
+//         const newUser = await db.raw(
+//             `INSERT INTO users (email, username, avatar_url, password) 
+//              VALUES (?, ?, ?, 'password_prueba_123') 
+//              RETURNING *`,
+//             [email, name, photo || 'https://via.placeholder.com/150']
+//         );
+
+//         res.status(201).json({ 
+//             message: "Usuario de prueba creado con éxito", 
+//             user: newUser.rows[0] 
+//         });
+
+//     } catch (error) {
+//         console.error("Error al crear usuario:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
