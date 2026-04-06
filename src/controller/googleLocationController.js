@@ -385,19 +385,30 @@ export const getGoogleLocations = async (req, res) => {
 // ==========================================
 // 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
 // ==========================================
+// ==========================================
+// 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
+// ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
+    
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
+    
     try {
-        // 👇 CAMBIO AQUÍ: Pedimos exintro, info y url
-        const url = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info&exintro&explaintext&inprop=url&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+        // 👇 CAMBIO CLAVE: Usamos el buscador inteligente (generator=search) en lugar de búsqueda exacta (titles=)
+        const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts|info&exintro=1&explaintext=1&inprop=url&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&origin=*`;
         
+        // Usamos tus WIKI_OPTS que ya tienen el User-Agent anti-403 🛡️
         const response = await axios.get(url, WIKI_OPTS);
         
-        const pages = response.data.query.pages;
-        const pageId = Object.keys(pages)[0];
-        if (pageId === "-1") return res.status(404).json({ error: "No encontrado" });
+        const pages = response.data?.query?.pages;
         
+        // Si Wikipedia no encuentra nada que se le parezca, devolvemos 404
+        if (!pages) {
+            return res.status(404).json({ error: "No encontrado" });
+        }
+        
+        // Tomamos el ID del primer artículo que el buscador de Wikipedia consideró como la mejor coincidencia
+        const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
 
         res.json({ 
@@ -406,7 +417,7 @@ export const getWikiFullDetails = async (req, res) => {
         });
 
     } catch (error) { 
-        console.error("Wiki Error:", error.message);
+        console.error("Wiki Error Backend:", error.message);
         res.status(500).json({ error: error.message }); 
     }
 };
