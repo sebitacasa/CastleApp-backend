@@ -97,41 +97,56 @@ const getWikipediaSummary = async (lat, lon, name) => {
 // 🗺️ 1. MAPA HÍBRIDO (GET /)
 // ==========================================
 export const getLocations = async (req, res) => {
-  const { lat, lon, category } = req.query;
+  // 💡 Extraemos page y pageToken
+  const { lat, lon, category, page = 1, pageToken } = req.query;
   const targetCategory = category || 'All';
+  const currentPage = parseInt(page, 10) || 1;
   
-  // 🌍 RADIO AMPLIO: 10km (Mantenido igual)
-  const googleRadius = 30000; 
+  // 🌍 RADIO AMPLIO PARA PAGINACIÓN: 50km
+  const googleRadius = 50000; 
 
   if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
 
   try {
-    const [dbResults, googleResults] = await Promise.all([
-      fetchFromDatabase(lat, lon, 20),
-      fetchFromGoogle(lat, lon, googleRadius, targetCategory)
-    ]);
+    // 💡 1. Paginación en la Base de Datos
+    const dbResults = await fetchFromDatabase(lat, lon, 50, currentPage);
+    
+    // 💡 2. Paginación en Google
+    let googleData = { places: [], nextToken: null };
+    // Solo pedimos a Google si es la página 1, o si tenemos un token para continuar
+    if (currentPage === 1 || pageToken) {
+        googleData = await fetchFromGoogle(lat, lon, googleRadius, targetCategory, pageToken);
+    }
 
-    const combined = [...dbResults, ...googleResults];
+    const combined = [...dbResults, ...googleData.places];
 
     const filtered = targetCategory === 'All' 
         ? combined 
         : combined.filter(item => item.category === targetCategory);
 
-    if (filtered.length === 0) {
-        return res.json([{
-            id: 'debug-1',
-            name: `Sin resultados para ${targetCategory}`,
-            description: 'Intenta buscar una ciudad manualmente o muévete a otra zona.',
-            latitude: parseFloat(lat),
-            longitude: parseFloat(lon),
-            image_url: 'https://images.unsplash.com/photo-1552832230-c0197dd311b5',
-            category: 'System', 
-            source: 'db',
-            country: 'Tu Ubicación'
-        }]);
+    // Si es la página 1 y no hay nada, mostramos el estado vacío
+    if (filtered.length === 0 && currentPage === 1) {
+        return res.json({
+            data: [{
+                id: 'debug-1',
+                name: `Sin resultados para ${targetCategory}`,
+                description: 'Intenta buscar una ciudad manualmente o muévete a otra zona.',
+                latitude: parseFloat(lat),
+                longitude: parseFloat(lon),
+                image_url: 'https://images.unsplash.com/photo-1552832230-c0197dd311b5',
+                category: 'System', 
+                source: 'db',
+                country: 'Tu Ubicación'
+            }],
+            nextGoogleToken: null
+        });
     }
 
-    res.json(filtered);
+    // 💡 3. Devolvemos los datos Y el token de la siguiente página de Google
+    res.json({
+        data: filtered,
+        nextGoogleToken: googleData.nextToken || null
+    });
 
   } catch (error) {
     console.error("Error Híbrido:", error);
@@ -140,17 +155,18 @@ export const getLocations = async (req, res) => {
 };
 
 // --- Auxiliar DB ---
-async function fetchFromDatabase(lat, lon, maxKm = 20) {
-  // 1. VALIDACIÓN DE SEGURIDAD 🛡️
-  // Si lat o lon son undefined, null, o no son números, NO ejecutamos SQL.
+async function fetchFromDatabase(lat, lon, maxKm = 50, page = 1) {
   if (!lat || !lon || isNaN(parseFloat(lat)) || isNaN(parseFloat(lon))) {
       console.warn("⚠️ fetchFromDatabase: Coordenadas inválidas recibidas:", { lat, lon });
-      return []; // Retornamos array vacío para no romper la app
+      return []; 
   }
 
-  // 2. CONVERSIÓN A NÚMEROS REALES
   const latNum = parseFloat(lat);
   const lonNum = parseFloat(lon);
+  
+  // 💡 Lógica de paginación
+  const limit = 20;
+  const offset = (page - 1) * limit;
 
   try {
     const query = `
@@ -166,11 +182,11 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) {
         sin(radians(?)) * sin(radians(latitude))
       )) < ? 
       ORDER BY distance ASC 
-      LIMIT 20
+      LIMIT ? OFFSET ?
     `;
 
-    // Pasamos los números ya limpios (latNum, lonNum)
-    const r = await db.raw(query, [latNum, lonNum, latNum, latNum, lonNum, latNum, maxKm]);
+    // 💡 Añadimos limit y offset al final
+    const r = await db.raw(query, [latNum, lonNum, latNum, latNum, lonNum, latNum, maxKm, limit, offset]);
     
     return r.rows.map(row => ({
       id: row.id.toString(),
@@ -182,7 +198,8 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) {
       source: 'db',      
       is_yours: true,
       country: row.location_text || 'Community', 
-      category: row.category || 'Others' 
+      category: row.category || 'Others',
+      distance: row.distance 
     }));
   } catch (err) { 
     console.error("🔥 Error CRÍTICO en DB:", err.message); 
@@ -191,7 +208,7 @@ async function fetchFromDatabase(lat, lon, maxKm = 20) {
 }
 
 // --- Auxiliar Google ---
-async function fetchFromGoogle(lat, lon, radius, category) {
+async function fetchFromGoogle(lat, lon, radius, category, pageToken = null) {
   try {
     const url = 'https://places.googleapis.com/v1/places:searchText';
     const queryText = CATEGORY_QUERIES[category] || CATEGORY_QUERIES['All'];
@@ -199,20 +216,26 @@ async function fetchFromGoogle(lat, lon, radius, category) {
     const requestBody = {
       textQuery: queryText,
       maxResultCount: 20,
-      // LocationBias mantenido igual
       locationBias: {
         circle: { center: { latitude: parseFloat(lat), longitude: parseFloat(lon) }, radius: radius }
       }
     };
 
+    // 💡 Si tenemos un token de Google de la página anterior, lo usamos
+    if (pageToken) {
+        requestBody.pageToken = pageToken;
+    }
+
     const headers = {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_API_KEY,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary,places.types' 
+      // 💡 Agregamos nextPageToken al FieldMask
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary,places.types,nextPageToken' 
     };
 
     const response = await axios.post(url, requestBody, { headers });
     const places = response.data.places || [];
+    const nextToken = response.data.nextPageToken || null; // 💡 Capturamos el token
 
     const enrichedData = await Promise.all(places.map(async (p) => {
         const pLat = p.location.latitude;
@@ -255,24 +278,25 @@ async function fetchFromGoogle(lat, lon, radius, category) {
         };
     }));
 
-    return enrichedData.filter(item => item !== null);
+    // 💡 Devolvemos los lugares Y el token
+    return {
+        places: enrichedData.filter(item => item !== null),
+        nextToken: nextToken
+    };
 
   } catch (err) {
     console.error("🔥 ERROR GOOGLE API:", err.response?.data || err.message);
-    return [];
+    return { places: [], nextToken: null };
   }
 }
 
 // ==========================================
 // 📥 2. SUGERIR / GUARDAR (POST /suggest)
 // ==========================================
-// src/controllers/locationsController.js
-
 export const suggestLocation = async (req, res) => {
   const { name, description, latitude, longitude, image_url, user_id, google_place_id, category, location_text } = req.body;
 
   try {
-    // Validación: Si viene un google_place_id, verificamos duplicados
     if (google_place_id) {
        const check = await db.raw('SELECT id FROM historical_locations WHERE google_place_id = ?', [google_place_id]);
        if (check.rows.length > 0) return res.status(400).json({ error: "Ya registrado." });
@@ -280,8 +304,6 @@ export const suggestLocation = async (req, res) => {
 
     const finalCategory = category || 'Others';
     const finalLocationText = location_text || 'Unknown Location';
-    
-    // 👇 CORRECCIÓN AQUÍ: Si es undefined, lo forzamos a null
     const finalGoogleId = google_place_id || null; 
 
     const newLoc = await db.raw(
@@ -290,15 +312,7 @@ export const suggestLocation = async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?) 
        RETURNING *`,
       [
-        name, 
-        description, 
-        latitude, 
-        longitude, 
-        image_url, 
-        user_id, 
-        finalGoogleId, // <--- Usamos la variable segura aquí (índice 6)
-        finalCategory, 
-        finalLocationText
+        name, description, latitude, longitude, image_url, user_id, finalGoogleId, finalCategory, finalLocationText
       ]
     );
 
@@ -309,6 +323,7 @@ export const suggestLocation = async (req, res) => {
     res.status(500).json({ error: "Error al guardar: " + err.message }); 
   }
 };
+
 // ==========================================
 // 🔭 3. BÚSQUEDA DE TEXTO (GET /external/search)
 // ==========================================
@@ -385,35 +400,24 @@ export const getGoogleLocations = async (req, res) => {
 // ==========================================
 // 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
 // ==========================================
-// ==========================================
-// 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
-// ==========================================
 export const getWikiFullDetails = async (req, res) => {
     const { title } = req.query;
     
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
     
     try {
-        // 👇 CAMBIO CLAVE: Usamos el buscador inteligente (generator=search) en lugar de búsqueda exacta (titles=)
         const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts|info&exintro=1&explaintext=1&inprop=url&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&origin=*`;
-        
-        // Usamos tus WIKI_OPTS que ya tienen el User-Agent anti-403 🛡️
         const response = await axios.get(url, WIKI_OPTS);
-        
         const pages = response.data?.query?.pages;
         
-        // Si Wikipedia no encuentra nada que se le parezca, devolvemos 404
-        if (!pages) {
-            return res.status(404).json({ error: "No encontrado" });
-        }
+        if (!pages) return res.status(404).json({ error: "No encontrado" });
         
-        // Tomamos el ID del primer artículo que el buscador de Wikipedia consideró como la mejor coincidencia
         const pageId = Object.keys(pages)[0];
         const pageData = pages[pageId];
 
         res.json({ 
-            full_description: pageData.extract, // Resumen
-            wiki_url: pageData.fullurl          // Enlace
+            full_description: pageData.extract,
+            wiki_url: pageData.fullurl          
         });
 
     } catch (error) { 
