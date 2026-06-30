@@ -83,10 +83,17 @@ const detectCategory = (primaryType, googleTypes = [], name = "") => {
 // ==========================================
 // 🧹 HELPERS
 // ==========================================
+// 🐛 OJO: antes esto usaba .includes(), que es un substring match ciego.
+// "shop" matchea dentro de "archbishop" y "store" matchea dentro de "restored" —
+// dos palabras que aparecen constantemente en artículos legítimos sobre iglesias
+// y sitios históricos restaurados, así que se estaban descartando como "basura"
+// la mayoría de las descripciones de catedrales y monumentos. Con \b (límite de
+// palabra) solo matchea la palabra suelta "shop"/"store", no como substring.
+const INVALID_CONTEXT_WORDS = ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document', 'shop', 'store', 'hotel', 'restaurant'];
+const INVALID_CONTEXT_REGEX = new RegExp(`\\b(${INVALID_CONTEXT_WORDS.join('|')})\\b`, 'i');
 const isInvalidContext = (text) => {
     if (!text) return false;
-    const lowerText = text.toLowerCase();
-    return ['clothing', 'underwear', 'medical', 'anatomy', 'diagram', 'map of', 'plan of', 'furniture', 'poster', 'advertisement', 'logo', 'icon', 'signature', 'document', 'shop', 'store', 'hotel', 'restaurant'].some(w => lowerText.includes(w));
+    return INVALID_CONTEXT_REGEX.test(text);
 };
 
 // Compara el nombre del lugar (Google) contra el título de Wikipedia encontrado,
