@@ -161,71 +161,90 @@ const getCountryFromAddress = (formattedAddress) => {
 
 const getWikiLangForCountry = (countryName) => COUNTRY_WIKI_LANG[countryName] || 'en';
 
-// Trae extracto + imagen de un artículo de Wikipedia ya identificado (sin buscar)
-const fetchWikipediaExtract = async (title, lang) => {
-    try {
-        const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
-        const detailsUrl = `${baseUrl}?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-        const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
-        const pages = detailsRes.data?.query?.pages;
-        if (!pages) return null;
-        const pageId = Object.keys(pages)[0];
-        if (pageId === '-1') return null;
-        const pageData = pages[pageId];
-        const description = pageData.extract ? pageData.extract.substring(0, 300) + "..." : null;
-        if (isInvalidContext(description)) return null;
-        return { title: pageData.title || title, description, imageUrl: pageData.original?.source || null };
-    } catch (error) {
-        console.error(`🔥 Wikipedia extract [${lang}] "${title}":`, error.response?.status || error.message);
-        return null;
-    }
+// Trae título + extracto COMPLETO (sin truncar) + imagen + url de un artículo
+// YA IDENTIFICADO (no busca, no valida relevancia).
+const fetchWikipediaArticle = async (title, lang) => {
+    const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
+    const detailsUrl = `${baseUrl}?action=query&prop=extracts|pageimages|info&exintro&explaintext&piprop=original&inprop=url&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+    const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
+    const pages = detailsRes.data?.query?.pages;
+    if (!pages) return null;
+    const pageId = Object.keys(pages)[0];
+    if (pageId === '-1' || !pages[pageId].extract) return null;
+    const pageData = pages[pageId];
+    return {
+        title: pageData.title || title,
+        extract: pageData.extract,
+        imageUrl: pageData.original?.source || null,
+        wikiUrl: pageData.fullurl || null,
+    };
 };
 
-// Busca por nombre en el Wikipedia de un idioma específico, valida relevancia
-// y, si está en un idioma distinto al inglés, intenta traer la versión en inglés.
-const searchWikipediaPage = async (name, lang) => {
-    try {
-        const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
-        const searchUrl = `${baseUrl}?action=query&list=search&srsearch=${encodeURIComponent(name)}&format=json&srlimit=1&origin=*`;
-        const searchRes = await axios.get(searchUrl, WIKI_OPTS);
-        const title = searchRes.data?.query?.search?.[0]?.title;
+// 🔎 Núcleo ÚNICO de búsqueda: busca por nombre en un idioma, VALIDA que el
+// título encontrado sea relevante (areNamesSimilar) y, si no es inglés,
+// intenta saltar a la versión en inglés vía langlinks (también validada, ya
+// que viene del mismo título ya confirmado). Devuelve el artículo sin
+// truncar, o null si no hay nada confiable.
+//
+// OJO: toda búsqueda en Wikipedia debe pasar por esta función. Antes existía
+// un segundo camino sin chequeo de relevancia (usado por el botón "Read
+// More"), y eso causaba que p. ej. buscar "St. Stephen's Cathedral" en
+// Wikipedia en alemán devolviera el artículo de "Brisbane" (porque ahí se
+// menciona una catedral con ese nombre) y se mostrara como si fuera la
+// historia de la catedral de Viena.
+const resolveWikipediaArticle = async (name, lang) => {
+    const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
+    const searchUrl = `${baseUrl}?action=query&list=search&srsearch=${encodeURIComponent(name)}&format=json&srlimit=1&origin=*`;
+    const searchRes = await axios.get(searchUrl, WIKI_OPTS);
+    const title = searchRes.data?.query?.search?.[0]?.title;
 
-        if (!title || !areNamesSimilar(name, title)) return null;
+    if (!title || !areNamesSimilar(name, title)) return null;
 
-        if (lang !== 'en') {
-            const langlinksUrl = `${baseUrl}?action=query&prop=langlinks&lllang=en&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-            const langRes = await axios.get(langlinksUrl, WIKI_OPTS);
-            const langPages = langRes.data?.query?.pages;
-            const langPageId = langPages ? Object.keys(langPages)[0] : null;
-            const enTitle = langPageId ? (langPages[langPageId].langlinks?.[0]?.['*'] || langPages[langPageId].langlinks?.[0]?.title) : null;
+    if (lang !== 'en') {
+        const langlinksUrl = `${baseUrl}?action=query&prop=langlinks&lllang=en&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+        const langRes = await axios.get(langlinksUrl, WIKI_OPTS);
+        const langPages = langRes.data?.query?.pages;
+        const langPageId = langPages ? Object.keys(langPages)[0] : null;
+        const enTitle = langPageId ? (langPages[langPageId].langlinks?.[0]?.['*'] || langPages[langPageId].langlinks?.[0]?.title) : null;
 
-            if (enTitle) {
-                const enResult = await fetchWikipediaExtract(enTitle, 'en');
-                if (enResult) return enResult;
-            }
+        if (enTitle) {
+            const enArticle = await fetchWikipediaArticle(enTitle, 'en');
+            if (enArticle) return enArticle;
         }
-
-        return await fetchWikipediaExtract(title, lang);
-    } catch (error) {
-        console.error(`🔥 Wikipedia search [${lang}] "${name}":`, error.response?.status || error.message);
-        return null;
     }
+
+    return await fetchWikipediaArticle(title, lang);
 };
 
-// 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas) y valida relevancia.
 // Prueba primero el idioma del país (ej. alemán para Austria), porque Google
-// entrega los nombres en el idioma local. Si no hay nada confiable, devuelve
-// null y el caller se queda con los datos por defecto que ya trae Google.
+// entrega los nombres en el idioma local; si no hay nada confiable ahí, cae a inglés.
+const resolveWikipediaArticleForCountry = async (name, countryName) => {
+    const localLang = getWikiLangForCountry(countryName);
+    if (localLang !== 'en') {
+        const localArticle = await resolveWikipediaArticle(name, localLang);
+        if (localArticle) return localArticle;
+    }
+    return await resolveWikipediaArticle(name, 'en');
+};
+
+// 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas), con la descripción
+// truncada a 300 caracteres para usarse en las cards del feed. Si no hay
+// nada confiable, devuelve null y el caller se queda con los datos por
+// defecto que ya trae Google.
 const getWikipediaByName = async (name, countryName) => {
     if (!name) return null;
-    const localLang = getWikiLangForCountry(countryName);
+    try {
+        const article = await resolveWikipediaArticleForCountry(name, countryName);
+        if (!article) return null;
 
-    if (localLang !== 'en') {
-        const localResult = await searchWikipediaPage(name, localLang);
-        if (localResult) return localResult;
+        const description = article.extract.substring(0, 300) + "...";
+        if (isInvalidContext(description)) return null;
+
+        return { title: article.title, description, imageUrl: article.imageUrl };
+    } catch (error) {
+        console.error(`🔥 Wikipedia lookup "${name}" (${countryName}):`, error.response?.status || error.message);
+        return null;
     }
-
-    return await searchWikipediaPage(name, 'en');
 };
 
 // ==========================================
@@ -541,18 +560,6 @@ export const getGoogleLocations = async (req, res) => {
     }
 };
 
-// Trae extracto COMPLETO (sin truncar) + URL del artículo, para el botón "Read More".
-const fetchWikiFull = async (title, lang) => {
-    const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
-    const url = `${baseUrl}?action=query&format=json&prop=extracts|info&exintro=1&explaintext=1&inprop=url&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&origin=*`;
-    const response = await axios.get(url, WIKI_OPTS);
-    const pages = response.data?.query?.pages;
-    if (!pages) return null;
-    const pageId = Object.keys(pages)[0];
-    if (pageId === '-1' || !pages[pageId].extract) return null;
-    return { full_description: pages[pageId].extract, wiki_url: pages[pageId].fullurl };
-};
-
 // ==========================================
 // 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
 // ==========================================
@@ -562,28 +569,15 @@ export const getWikiFullDetails = async (req, res) => {
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
 
     try {
-        // Igual que en el feed: si el país mapea a un idioma local, lo probamos
-        // primero (el "title" puede ser el nombre crudo del lugar en ese idioma
-        // cuando no se resolvió un wiki_title en inglés durante el armado del feed).
-        const localLang = getWikiLangForCountry(country);
-        let result = null;
+        // Usa el MISMO núcleo validado que el feed (resolveWikipediaArticleForCountry),
+        // así "Read More" no puede traer un artículo irrelevante que el feed ya descartó.
+        const article = await resolveWikipediaArticleForCountry(title, country);
 
-        if (localLang !== 'en') {
-            result = await fetchWikiFull(title, localLang).catch((e) => {
-                console.error(`🔥 Wiki full [${localLang}] "${title}":`, e.response?.status || e.message);
-                return null;
-            });
-        }
-        if (!result) {
-            result = await fetchWikiFull(title, 'en').catch((e) => {
-                console.error(`🔥 Wiki full [en] "${title}":`, e.response?.status || e.message);
-                return null;
-            });
+        if (!article || isInvalidContext(article.extract)) {
+            return res.status(404).json({ error: "No encontrado" });
         }
 
-        if (!result) return res.status(404).json({ error: "No encontrado" });
-
-        res.json(result);
+        res.json({ full_description: article.extract, wiki_url: article.wikiUrl });
 
     } catch (error) {
         console.error("Wiki Error Backend:", error.message);
