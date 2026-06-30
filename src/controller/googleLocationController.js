@@ -4,12 +4,16 @@ import db from '../config/db.js';
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
 // 👇 CONFIGURACIÓN ANTI-BLOQUEO WIKIPEDIA
+// Wikimedia exige un User-Agent con URL o contacto real (ver
+// https://meta.wikimedia.org/wiki/User-Agent_policy); un UA genérico como el
+// que había antes ("CastleApp/1.0 (Educational Project)") puede ser
+// bloqueado SIN AVISO por su WAF, sobre todo desde IPs de hosting/cloud como
+// las de Railway — eso explicaría el 100% de fallos silenciosos que veíamos.
 const WIKI_OPTS = {
     headers: {
-        'User-Agent': 'CastleApp/1.0 (Educational Project)',
-        'Api-User-Agent': 'CastleApp/1.0'
+        'User-Agent': 'CastleApp/1.0 (https://github.com/sebitacasa/CastleApp-backend; contact via GitHub issues)'
     },
-    timeout: 5000
+    timeout: 6000
 };
 
 // ==========================================
@@ -164,7 +168,10 @@ const fetchWikipediaExtract = async (title, lang) => {
         const description = pageData.extract ? pageData.extract.substring(0, 300) + "..." : null;
         if (isInvalidContext(description)) return null;
         return { title: pageData.title || title, description, imageUrl: pageData.original?.source || null };
-    } catch (error) { return null; }
+    } catch (error) {
+        console.error(`🔥 Wikipedia extract [${lang}] "${title}":`, error.response?.status || error.message);
+        return null;
+    }
 };
 
 // Busca por nombre en el Wikipedia de un idioma específico, valida relevancia
@@ -192,7 +199,10 @@ const searchWikipediaPage = async (name, lang) => {
         }
 
         return await fetchWikipediaExtract(title, lang);
-    } catch (error) { return null; }
+    } catch (error) {
+        console.error(`🔥 Wikipedia search [${lang}] "${name}":`, error.response?.status || error.message);
+        return null;
+    }
 };
 
 // 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas) y valida relevancia.
@@ -524,28 +534,49 @@ export const getGoogleLocations = async (req, res) => {
     }
 };
 
+// Trae extracto COMPLETO (sin truncar) + URL del artículo, para el botón "Read More".
+const fetchWikiFull = async (title, lang) => {
+    const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
+    const url = `${baseUrl}?action=query&format=json&prop=extracts|info&exintro=1&explaintext=1&inprop=url&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&origin=*`;
+    const response = await axios.get(url, WIKI_OPTS);
+    const pages = response.data?.query?.pages;
+    if (!pages) return null;
+    const pageId = Object.keys(pages)[0];
+    if (pageId === '-1' || !pages[pageId].extract) return null;
+    return { full_description: pages[pageId].extract, wiki_url: pages[pageId].fullurl };
+};
+
 // ==========================================
 // 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
-    const { title } = req.query;
+    const { title, country } = req.query;
 
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
 
     try {
-        const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts|info&exintro=1&explaintext=1&inprop=url&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&origin=*`;
-        const response = await axios.get(url, WIKI_OPTS);
-        const pages = response.data?.query?.pages;
+        // Igual que en el feed: si el país mapea a un idioma local, lo probamos
+        // primero (el "title" puede ser el nombre crudo del lugar en ese idioma
+        // cuando no se resolvió un wiki_title en inglés durante el armado del feed).
+        const localLang = getWikiLangForCountry(country);
+        let result = null;
 
-        if (!pages) return res.status(404).json({ error: "No encontrado" });
+        if (localLang !== 'en') {
+            result = await fetchWikiFull(title, localLang).catch((e) => {
+                console.error(`🔥 Wiki full [${localLang}] "${title}":`, e.response?.status || e.message);
+                return null;
+            });
+        }
+        if (!result) {
+            result = await fetchWikiFull(title, 'en').catch((e) => {
+                console.error(`🔥 Wiki full [en] "${title}":`, e.response?.status || e.message);
+                return null;
+            });
+        }
 
-        const pageId = Object.keys(pages)[0];
-        const pageData = pages[pageId];
+        if (!result) return res.status(404).json({ error: "No encontrado" });
 
-        res.json({
-            full_description: pageData.extract,
-            wiki_url: pageData.fullurl
-        });
+        res.json(result);
 
     } catch (error) {
         console.error("Wiki Error Backend:", error.message);
