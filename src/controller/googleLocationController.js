@@ -261,21 +261,33 @@ export const getLocations = async (req, res) => {
   if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
 
   try {
-    // 💡 1. Paginación en la Base de Datos
+    // 💡 1. Paginación en la Base de Datos (ya viene acotada a 50km por la
+    // formula de Haversine en el WHERE de fetchFromDatabase — un lugar
+    // subido en Haag nunca puede aparecer para alguien a 1300km en Barcelona).
     const dbResults = await fetchFromDatabase(lat, lon, 50, currentPage);
 
     // 💡 2. Google Nearby Search (Places API New no soporta pageToken en Nearby Search,
     // así que solo se consulta en la página 1; las siguientes páginas solo paginan la DB)
+    // La categoría "Community" es 100% lugares subidos por usuarios (dbResults),
+    // así que ni vale la pena pedirle nada a Google para ese caso.
     let googlePlaces = [];
-    if (currentPage === 1) {
+    if (currentPage === 1 && targetCategory !== 'Community') {
         googlePlaces = await fetchFromGoogle(lat, lon, googleRadius, targetCategory);
     }
 
     const combined = [...dbResults, ...googlePlaces];
 
-    const filtered = targetCategory === 'All'
-        ? combined
-        : combined.filter(item => item.category === targetCategory);
+    let filtered;
+    if (targetCategory === 'All') {
+        filtered = combined;
+    } else if (targetCategory === 'Community') {
+        // 🐛 Antes el frontend ni mandaba ?category=Community (lo trataba como
+        // "sin filtro"), así que esta pestaña mostraba TODO (DB + Google)
+        // mezclado en vez de aislar solo los lugares de la comunidad.
+        filtered = combined.filter(item => item.source === 'db');
+    } else {
+        filtered = combined.filter(item => item.category === targetCategory);
+    }
 
     if (filtered.length === 0 && currentPage === 1) {
         return res.json({
