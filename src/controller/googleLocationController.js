@@ -101,36 +101,114 @@ const areNamesSimilar = (placeName, wikiTitle) => {
     return targetWords.some(w => bWords.includes(w));
 };
 
-// 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas) y valida relevancia.
-// Si no hay match confiable, devuelve null y el caller debe quedarse con
-// los datos por defecto que ya trae la API de Google (descripción/foto).
-const getWikipediaByName = async (name) => {
-    if (!name) return null;
+// ==========================================
+// 🌍 IDIOMA LOCAL DE WIKIPEDIA SEGÚN EL PAÍS
+// ==========================================
+// Google devuelve los nombres de lugares en su idioma local (ej: "Burgruine
+// Aggstein" en vez de "Aggstein Castle"), así que buscar SIEMPRE en Wikipedia
+// en inglés fallaba para la mayoría de los lugares en Austria/Alemania/etc.
+// Ahora se busca primero en el Wikipedia del idioma del país y, si existe,
+// se intenta saltar a la versión en inglés vía langlinks para mantener la UI
+// consistente; si no hay versión en inglés, se usa el contenido local.
+const COUNTRY_WIKI_LANG = {
+    'Austria': 'de', 'Germany': 'de', 'Switzerland': 'de', 'Liechtenstein': 'de',
+    'France': 'fr', 'Monaco': 'fr',
+    'Italy': 'it', 'San Marino': 'it', 'Vatican City': 'it',
+    'Spain': 'es', 'Mexico': 'es', 'Argentina': 'es', 'Chile': 'es', 'Colombia': 'es', 'Peru': 'es', 'Uruguay': 'es', 'Ecuador': 'es', 'Venezuela': 'es', 'Bolivia': 'es', 'Paraguay': 'es', 'Costa Rica': 'es', 'Panama': 'es',
+    'Portugal': 'pt', 'Brazil': 'pt',
+    'Netherlands': 'nl', 'Belgium': 'nl',
+    'Poland': 'pl',
+    'Czechia': 'cs', 'Czech Republic': 'cs',
+    'Slovakia': 'sk',
+    'Hungary': 'hu',
+    'Romania': 'ro',
+    'Bulgaria': 'bg',
+    'Greece': 'el',
+    'Croatia': 'hr',
+    'Slovenia': 'sl',
+    'Serbia': 'sr',
+    'Bosnia and Herzegovina': 'bs',
+    'North Macedonia': 'mk',
+    'Albania': 'sq',
+    'Denmark': 'da',
+    'Sweden': 'sv',
+    'Norway': 'no',
+    'Finland': 'fi',
+    'Iceland': 'is',
+    'Estonia': 'et',
+    'Latvia': 'lv',
+    'Lithuania': 'lt',
+    'Ukraine': 'uk',
+    'Turkey': 'tr',
+};
+
+const getCountryFromAddress = (formattedAddress) => {
+    if (!formattedAddress) return null;
+    const parts = formattedAddress.split(',');
+    return parts[parts.length - 1].trim();
+};
+
+const getWikiLangForCountry = (countryName) => COUNTRY_WIKI_LANG[countryName] || 'en';
+
+// Trae extracto + imagen de un artículo de Wikipedia ya identificado (sin buscar)
+const fetchWikipediaExtract = async (title, lang) => {
     try {
-        const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(name)}&format=json&srlimit=1&origin=*`;
+        const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
+        const detailsUrl = `${baseUrl}?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+        const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
+        const pages = detailsRes.data?.query?.pages;
+        if (!pages) return null;
+        const pageId = Object.keys(pages)[0];
+        if (pageId === '-1') return null;
+        const pageData = pages[pageId];
+        const description = pageData.extract ? pageData.extract.substring(0, 300) + "..." : null;
+        if (isInvalidContext(description)) return null;
+        return { title: pageData.title || title, description, imageUrl: pageData.original?.source || null };
+    } catch (error) { return null; }
+};
+
+// Busca por nombre en el Wikipedia de un idioma específico, valida relevancia
+// y, si está en un idioma distinto al inglés, intenta traer la versión en inglés.
+const searchWikipediaPage = async (name, lang) => {
+    try {
+        const baseUrl = `https://${lang}.wikipedia.org/w/api.php`;
+        const searchUrl = `${baseUrl}?action=query&list=search&srsearch=${encodeURIComponent(name)}&format=json&srlimit=1&origin=*`;
         const searchRes = await axios.get(searchUrl, WIKI_OPTS);
         const title = searchRes.data?.query?.search?.[0]?.title;
 
         if (!title || !areNamesSimilar(name, title)) return null;
 
-        const detailsUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-        const detailsRes = await axios.get(detailsUrl, WIKI_OPTS);
-        const pages = detailsRes.data?.query?.pages;
-        if (!pages) return null;
+        if (lang !== 'en') {
+            const langlinksUrl = `${baseUrl}?action=query&prop=langlinks&lllang=en&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+            const langRes = await axios.get(langlinksUrl, WIKI_OPTS);
+            const langPages = langRes.data?.query?.pages;
+            const langPageId = langPages ? Object.keys(langPages)[0] : null;
+            const enTitle = langPageId ? (langPages[langPageId].langlinks?.[0]?.['*'] || langPages[langPageId].langlinks?.[0]?.title) : null;
 
-        const pageId = Object.keys(pages)[0];
-        if (pageId === '-1') return null;
-        const pageData = pages[pageId];
-        const description = pageData.extract ? pageData.extract.substring(0, 300) + "..." : null;
+            if (enTitle) {
+                const enResult = await fetchWikipediaExtract(enTitle, 'en');
+                if (enResult) return enResult;
+            }
+        }
 
-        if (isInvalidContext(description)) return null;
-
-        return {
-            title: pageData.title || title,
-            description,
-            imageUrl: pageData.original?.source || null
-        };
+        return await fetchWikipediaExtract(title, lang);
     } catch (error) { return null; }
+};
+
+// 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas) y valida relevancia.
+// Prueba primero el idioma del país (ej. alemán para Austria), porque Google
+// entrega los nombres en el idioma local. Si no hay nada confiable, devuelve
+// null y el caller se queda con los datos por defecto que ya trae Google.
+const getWikipediaByName = async (name, countryName) => {
+    if (!name) return null;
+    const localLang = getWikiLangForCountry(countryName);
+
+    if (localLang !== 'en') {
+        const localResult = await searchWikipediaPage(name, localLang);
+        if (localResult) return localResult;
+    }
+
+    return await searchWikipediaPage(name, 'en');
 };
 
 // ==========================================
@@ -290,7 +368,7 @@ async function fetchFromGoogle(lat, lon, radius, category) {
         let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
         let wikiTitle = null;
 
-        const wikiData = await getWikipediaByName(pName);
+        const wikiData = await getWikipediaByName(pName, getCountryFromAddress(p.formattedAddress));
         if (wikiData) {
             if (wikiData.description) finalDesc = wikiData.description;
             if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
@@ -416,7 +494,7 @@ export const getGoogleLocations = async (req, res) => {
             let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
             let wikiTitle = null;
 
-            const wikiData = await getWikipediaByName(pName);
+            const wikiData = await getWikipediaByName(pName, getCountryFromAddress(p.formattedAddress));
             if (wikiData) {
                 if (wikiData.description) finalDesc = wikiData.description;
                 if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
