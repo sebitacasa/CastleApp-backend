@@ -96,6 +96,20 @@ const isInvalidContext = (text) => {
     return INVALID_CONTEXT_REGEX.test(text);
 };
 
+// Palabras genéricas (honoríficos, términos arquitectónicos y preposiciones)
+// que aparecen en decenas de lugares distintos y por sí solas no prueban nada:
+// media Roma se llama "Santa Maria algo" o "Basilica di algo". Confirmado en
+// vivo contra producción: buscar "Santa Maria della Vittoria" matcheaba con el
+// artículo de "Santa Maria Maggiore", y "Santa Maria in Trastevere" con el de
+// "Santa Cecilia in Trastevere" -- ambos comparten solo "santa"/"basilica"/
+// "maria", nunca la palabra que realmente distingue un lugar del otro.
+const GENERIC_WORDS = [
+    'saint', 'santo', 'santa', 'santi', 'san', 'sant', 'st',
+    'basilica', 'chiesa', 'church', 'cathedral', 'cattedrale', 'duomo',
+    'papal', 'pontificio', 'pontifical', 'santuario', 'sanctuary', 'shrine',
+    'of', 'the', 'and', 'in', 'di', 'dei', 'degli', 'della', 'del', 'la', 'le', 'il', 'e',
+];
+
 // Compara el nombre del lugar (Google) contra el título de Wikipedia encontrado,
 // para evitar quedarnos con un artículo que no es realmente sobre ese lugar.
 const areNamesSimilar = (placeName, wikiTitle) => {
@@ -106,10 +120,17 @@ const areNamesSimilar = (placeName, wikiTitle) => {
     if (!a || !b) return false;
     if (a.includes(b) || b.includes(a)) return true;
 
-    const significantWords = a.split(' ').filter(w => w.length >= 4);
     const bWords = b.split(' ');
-    const targetWords = significantWords.length > 0 ? significantWords : a.split(' ');
-    return targetWords.some(w => bWords.includes(w));
+    const aWords = a.split(' ').filter(w => w.length >= 4);
+    const significantWords = aWords.filter(w => !GENERIC_WORDS.includes(w));
+
+    // Nombre puramente genérico (ej. solo "Santa Maria"): no hay palabra
+    // distintiva que validar, caemos al chequeo laxo de antes.
+    if (significantWords.length === 0) return aWords.some(w => bWords.includes(w));
+
+    // Todas las palabras distintivas deben aparecer en el título candidato --
+    // ya no alcanza con compartir "santa"/"basilica" para darlo por bueno.
+    return significantWords.every(w => bWords.includes(w));
 };
 
 // ==========================================
