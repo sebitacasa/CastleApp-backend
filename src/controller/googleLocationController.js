@@ -1,4 +1,5 @@
 import axios from 'axios';
+import countryLanguage from 'country-language';
 import db from '../config/db.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -114,7 +115,12 @@ const GENERIC_WORDS = [
 // para evitar quedarnos con un artículo que no es realmente sobre ese lugar.
 const areNamesSimilar = (placeName, wikiTitle) => {
     if (!placeName || !wikiTitle) return false;
-    const norm = (s) => s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^a-z0-9 ]/g, " ").trim();
+    // 👇 \p{L}\p{N} (letras/números Unicode), NO a-z0-9: la versión anterior
+    // solo dejaba ASCII, así que nombres en japonés/coreano/árabe/etc. quedaban
+    // reducidos a string vacío y la validación rechazaba SIEMPRE, aunque el
+    // título de Wikipedia fuera idéntico (confirmado en vivo: "姫路城" contra
+    // el artículo "姫路城" -- mismo texto -- se rechazaba por string vacío).
+    const norm = (s) => s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N} ]/gu, " ").trim();
     const a = norm(placeName);
     const b = norm(wikiTitle);
     if (!a || !b) return false;
@@ -138,49 +144,30 @@ const areNamesSimilar = (placeName, wikiTitle) => {
 // ==========================================
 // Google devuelve los nombres de lugares en su idioma local (ej: "Burgruine
 // Aggstein" en vez de "Aggstein Castle"), así que buscar SIEMPRE en Wikipedia
-// en inglés fallaba para la mayoría de los lugares en Austria/Alemania/etc.
-// Ahora se busca primero en el Wikipedia del idioma del país y, si existe,
-// se intenta saltar a la versión en inglés vía langlinks para mantener la UI
-// consistente; si no hay versión en inglés, se usa el contenido local.
-const COUNTRY_WIKI_LANG = {
-    'Austria': 'de', 'Germany': 'de', 'Switzerland': 'de', 'Liechtenstein': 'de',
-    'France': 'fr', 'Monaco': 'fr',
-    'Italy': 'it', 'San Marino': 'it', 'Vatican City': 'it',
-    'Spain': 'es', 'Mexico': 'es', 'Argentina': 'es', 'Chile': 'es', 'Colombia': 'es', 'Peru': 'es', 'Uruguay': 'es', 'Ecuador': 'es', 'Venezuela': 'es', 'Bolivia': 'es', 'Paraguay': 'es', 'Costa Rica': 'es', 'Panama': 'es',
-    'Portugal': 'pt', 'Brazil': 'pt',
-    'Netherlands': 'nl', 'Belgium': 'nl',
-    'Poland': 'pl',
-    'Czechia': 'cs', 'Czech Republic': 'cs',
-    'Slovakia': 'sk',
-    'Hungary': 'hu',
-    'Romania': 'ro',
-    'Bulgaria': 'bg',
-    'Greece': 'el',
-    'Croatia': 'hr',
-    'Slovenia': 'sl',
-    'Serbia': 'sr',
-    'Bosnia and Herzegovina': 'bs',
-    'North Macedonia': 'mk',
-    'Albania': 'sq',
-    'Denmark': 'da',
-    'Sweden': 'sv',
-    'Norway': 'no',
-    'Finland': 'fi',
-    'Iceland': 'is',
-    'Estonia': 'et',
-    'Latvia': 'lv',
-    'Lithuania': 'lt',
-    'Ukraine': 'uk',
-    'Turkey': 'tr',
+// en inglés fallaba para la mayoría de los lugares fuera de países de habla
+// inglesa. Antes esto era una lista a mano de ~30 países (mayormente
+// Europa); cualquier país fuera de esa lista (Japón, Egipto, India, etc.)
+// caía directo a inglés. Ahora se usa "country-language" (dataset de
+// idiomas oficiales/hablados por país vía ISO 3166-1) para cubrir los ~195
+// países sin mantener una lista manual, y se prueban varios candidatos
+// -- en países multilingües (Suiza, Bélgica, India) no hay forma confiable
+// de saber "el" idioma correcto sin mirar el nombre real del lugar, así que
+// se intentan hasta 3 antes de caer a inglés.
+const getWikiLangsForCountry = (countryCode) => {
+    if (!countryCode) return [];
+    const langs = countryLanguage.getCountryLanguages(countryCode) || [];
+    const codes = langs.map(l => l.iso639_1).filter(Boolean);
+    return [...new Set(codes)].filter(c => c !== 'en').slice(0, 3);
 };
 
-const getCountryFromAddress = (formattedAddress) => {
-    if (!formattedAddress) return null;
-    const parts = formattedAddress.split(',');
-    return parts[parts.length - 1].trim();
+// Extrae el código ISO-2 del país (ej. "IT") de los addressComponents que
+// devuelve Google Places API (New) -- mucho más confiable que parsear texto
+// libre de formattedAddress, que varía de formato según el país.
+const extractCountryCode = (addressComponents) => {
+    if (!Array.isArray(addressComponents)) return null;
+    const countryComp = addressComponents.find(c => c.types?.includes('country'));
+    return countryComp?.shortText || null;
 };
-
-const getWikiLangForCountry = (countryName) => COUNTRY_WIKI_LANG[countryName] || 'en';
 
 // Trae título + extracto COMPLETO (sin truncar) + imagen + url de un artículo
 // YA IDENTIFICADO (no busca, no valida relevancia).
@@ -237,13 +224,14 @@ const resolveWikipediaArticle = async (name, lang) => {
     return await fetchWikipediaArticle(title, lang);
 };
 
-// Prueba primero el idioma del país (ej. alemán para Austria), porque Google
-// entrega los nombres en el idioma local; si no hay nada confiable ahí, cae a inglés.
-const resolveWikipediaArticleForCountry = async (name, countryName) => {
-    const localLang = getWikiLangForCountry(countryName);
-    if (localLang !== 'en') {
-        const localArticle = await resolveWikipediaArticle(name, localLang);
-        if (localArticle) return localArticle;
+// Prueba los idiomas locales del país (ej. alemán para Austria), porque
+// Google entrega los nombres en el idioma local; si ninguno da algo
+// confiable, cae a inglés.
+const resolveWikipediaArticleForCountry = async (name, countryCode) => {
+    const candidateLangs = getWikiLangsForCountry(countryCode);
+    for (const lang of candidateLangs) {
+        const article = await resolveWikipediaArticle(name, lang);
+        if (article) return article;
     }
     return await resolveWikipediaArticle(name, 'en');
 };
@@ -252,10 +240,10 @@ const resolveWikipediaArticleForCountry = async (name, countryName) => {
 // truncada a 300 caracteres para usarse en las cards del feed. Si no hay
 // nada confiable, devuelve null y el caller se queda con los datos por
 // defecto que ya trae Google.
-const getWikipediaByName = async (name, countryName) => {
+const getWikipediaByName = async (name, countryCode) => {
     if (!name) return null;
     try {
-        const article = await resolveWikipediaArticleForCountry(name, countryName);
+        const article = await resolveWikipediaArticleForCountry(name, countryCode);
         if (!article) return null;
 
         const description = article.extract.substring(0, 300) + "...";
@@ -263,7 +251,7 @@ const getWikipediaByName = async (name, countryName) => {
 
         return { title: article.title, description, imageUrl: article.imageUrl };
     } catch (error) {
-        console.error(`🔥 Wikipedia lookup "${name}" (${countryName}):`, error.response?.status || error.message);
+        console.error(`🔥 Wikipedia lookup "${name}" (${countryCode}):`, error.response?.status || error.message);
         return null;
     }
 };
@@ -404,7 +392,7 @@ async function searchNearbyByTypes(lat, lon, radius, types) {
         const headers = {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
         };
         const response = await axios.post(url, requestBody, { headers });
         return response.data.places || [];
@@ -437,7 +425,8 @@ async function fetchFromGoogle(lat, lon, radius, category) {
         let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
         let wikiTitle = null;
 
-        const wikiData = await getWikipediaByName(pName, getCountryFromAddress(p.formattedAddress));
+        const countryCode = extractCountryCode(p.addressComponents);
+        const wikiData = await getWikipediaByName(pName, countryCode);
         if (wikiData) {
             if (wikiData.description) finalDesc = wikiData.description;
             if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
@@ -463,6 +452,7 @@ async function fetchFromGoogle(lat, lon, radius, category) {
             google_place_id: p.id,
             address: p.formattedAddress,
             country: shortAddress,
+            country_code: countryCode,
             wiki_title: wikiTitle
         };
     }));
@@ -546,7 +536,7 @@ export const getGoogleLocations = async (req, res) => {
         const headers = {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
         };
 
         const response = await axios.post(url, requestBody, { headers });
@@ -563,7 +553,8 @@ export const getGoogleLocations = async (req, res) => {
             let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
             let wikiTitle = null;
 
-            const wikiData = await getWikipediaByName(pName, getCountryFromAddress(p.formattedAddress));
+            const countryCode = extractCountryCode(p.addressComponents);
+            const wikiData = await getWikipediaByName(pName, countryCode);
             if (wikiData) {
                 if (wikiData.description) finalDesc = wikiData.description;
                 if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
@@ -582,7 +573,7 @@ export const getGoogleLocations = async (req, res) => {
                 image_url: finalImage || 'https://via.placeholder.com/400x300',
                 category: detectedCat,
                 source: 'google', google_place_id: p.id,
-                address: p.formattedAddress, country: shortAddress, wiki_title: wikiTitle
+                address: p.formattedAddress, country: shortAddress, country_code: countryCode, wiki_title: wikiTitle
             };
         }));
 
@@ -597,14 +588,18 @@ export const getGoogleLocations = async (req, res) => {
 // 📖 4. WIKIPEDIA DETALLE (RESUMEN + LINK)
 // ==========================================
 export const getWikiFullDetails = async (req, res) => {
-    const { title, country } = req.query;
+    // country_code: ISO-2 (ej. "IT"), viene del feed via extractCountryCode.
+    // Clientes viejos de la app (que todavía mandan "country" en texto libre en
+    // vez de "country_code") van a caer directo a inglés -- mismo
+    // comportamiento que ya tenían cuando el país no se reconocía.
+    const { title, country_code } = req.query;
 
     if (!title || title === 'null') return res.status(400).json({ error: 'Título inválido' });
 
     try {
         // Usa el MISMO núcleo validado que el feed (resolveWikipediaArticleForCountry),
         // así "Read More" no puede traer un artículo irrelevante que el feed ya descartó.
-        const article = await resolveWikipediaArticleForCountry(title, country);
+        const article = await resolveWikipediaArticleForCountry(title, country_code);
 
         if (!article || isInvalidContext(article.extract)) {
             return res.status(404).json({ error: "No encontrado" });
