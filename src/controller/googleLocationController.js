@@ -104,10 +104,26 @@ const isInvalidContext = (text) => {
 // artículo de "Santa Maria Maggiore", y "Santa Maria in Trastevere" con el de
 // "Santa Cecilia in Trastevere" -- ambos comparten solo "santa"/"basilica"/
 // "maria", nunca la palabra que realmente distingue un lugar del otro.
+//
+// También pasa con castillos/fortificaciones: Google le puso "Castello della
+// Cervelletta" a un lugar cuyo artículo real de Wikipedia se llama "Casale
+// della Cervelletta" (Google lo clasificó como castillo, Wikipedia lo describe
+// como casa de campo/finca fortificada). "Castello" es tan genérico y no-
+// discriminante para este dominio como "Basilica", así que se suman los
+// descriptores de tipo de edificio de las categorías que maneja la app
+// (castillos, ruinas, museos, sitios religiosos) en varios idiomas.
 const GENERIC_WORDS = [
     'saint', 'santo', 'santa', 'santi', 'san', 'sant', 'st',
     'basilica', 'chiesa', 'church', 'cathedral', 'cattedrale', 'duomo',
     'papal', 'pontificio', 'pontifical', 'santuario', 'sanctuary', 'shrine',
+    'abbey', 'abbazia', 'monastery', 'monastero', 'convent', 'convento',
+    'temple', 'tempio', 'chapel', 'cappella', 'hermitage', 'eremo',
+    'castle', 'castello', 'chateau', 'château', 'schloss', 'burg',
+    'palace', 'palazzo', 'palais', 'villa', 'casale', 'manor', 'maniero', 'mansion',
+    'tower', 'torre', 'turm', 'fort', 'fortress', 'fortezza', 'festung',
+    'citadel', 'cittadella', 'rocca', 'stronghold', 'keep',
+    'ruins', 'ruina', 'rovina', 'rovine',
+    'museum', 'museo', 'gallery', 'galleria',
     'of', 'the', 'and', 'in', 'di', 'dei', 'degli', 'della', 'del', 'la', 'le', 'il', 'e',
 ];
 
@@ -153,10 +169,20 @@ const areNamesSimilar = (placeName, wikiTitle) => {
 // -- en países multilingües (Suiza, Bélgica, India) no hay forma confiable
 // de saber "el" idioma correcto sin mirar el nombre real del lugar, así que
 // se intentan hasta 3 antes de caer a inglés.
+//
+// getCountryLanguages() sola devuelve los idiomas de un país en un orden que
+// NO refleja cuál es el dominante -- para Italia daba [fr, de, it], porque
+// francés/alemán son cooficiales en regiones (Valle de Aosta, Tirol del Sur)
+// pero la librería no pondera por población. Se reordena usando
+// getCountry().languages, que sí trae cuántos países más hablan cada idioma
+// (.countries.length): un idioma "exclusivo" de pocos países (como el
+// italiano) es más probable que sea EL idioma nacional que uno compartido
+// por decenas (como el francés), así que se prueba primero.
 const getWikiLangsForCountry = (countryCode) => {
     if (!countryCode) return [];
-    const langs = countryLanguage.getCountryLanguages(countryCode) || [];
-    const codes = langs.map(l => l.iso639_1).filter(Boolean);
+    const langs = countryLanguage.getCountry(countryCode)?.languages || [];
+    const sorted = [...langs].sort((a, b) => (a.countries?.length || 0) - (b.countries?.length || 0));
+    const codes = sorted.map(l => l.iso639_1).filter(Boolean);
     return [...new Set(codes)].filter(c => c !== 'en').slice(0, 3);
 };
 
@@ -191,8 +217,9 @@ const fetchWikipediaArticle = async (title, lang) => {
 // 🔎 Núcleo ÚNICO de búsqueda: busca por nombre en un idioma, VALIDA que el
 // título encontrado sea relevante (areNamesSimilar) y, si no es inglés,
 // intenta saltar a la versión en inglés vía langlinks (también validada, ya
-// que viene del mismo título ya confirmado). Devuelve el artículo sin
-// truncar, o null si no hay nada confiable.
+// que viene del mismo título ya confirmado). Devuelve { article, isEnglish }
+// (isEnglish indica si se llegó a un artículo en inglés, vía jump o porque
+// lang ya era 'en') o null si no hay nada confiable.
 //
 // OJO: toda búsqueda en Wikipedia debe pasar por esta función. Antes existía
 // un segundo camino sin chequeo de relevancia (usado por el botón "Read
@@ -217,23 +244,35 @@ const resolveWikipediaArticle = async (name, lang) => {
 
         if (enTitle) {
             const enArticle = await fetchWikipediaArticle(enTitle, 'en');
-            if (enArticle) return enArticle;
+            if (enArticle) return { article: enArticle, isEnglish: true };
         }
     }
 
-    return await fetchWikipediaArticle(title, lang);
+    const localArticle = await fetchWikipediaArticle(title, lang);
+    return localArticle ? { article: localArticle, isEnglish: lang === 'en' } : null;
 };
 
-// Prueba los idiomas locales del país (ej. alemán para Austria), porque
-// Google entrega los nombres en el idioma local; si ninguno da algo
-// confiable, cae a inglés.
+// Prueba los idiomas candidatos del país (ej. alemán para Austria), porque
+// Google entrega los nombres en el idioma local. El orden que da la librería
+// de idiomas por país no siempre es "el idioma dominante primero" (ej. Italia
+// devuelve francés y alemán antes que italiano, por las minorías de Valle de
+// Aosta y Tirol del Sur) -- confirmado en vivo: "Castello della Cervelletta"
+// encontraba un stub en FRANCÉS sin link a inglés y se mostraba tal cual en
+// vez de intentar italiano/inglés. Por eso no nos quedamos con el primer
+// candidato que responda algo: seguimos probando hasta encontrar uno que
+// llegue a inglés, y solo si NINGUNO lo logra devolvemos el primer resultado
+// en idioma local que haya salido válido.
 const resolveWikipediaArticleForCountry = async (name, countryCode) => {
     const candidateLangs = getWikiLangsForCountry(countryCode);
+    let localFallback = null;
     for (const lang of candidateLangs) {
-        const article = await resolveWikipediaArticle(name, lang);
-        if (article) return article;
+        const result = await resolveWikipediaArticle(name, lang);
+        if (result?.isEnglish) return result.article;
+        if (result && !localFallback) localFallback = result.article;
     }
-    return await resolveWikipediaArticle(name, 'en');
+    const enResult = await resolveWikipediaArticle(name, 'en');
+    if (enResult) return enResult.article;
+    return localFallback;
 };
 
 // 🔎 Busca en Wikipedia POR NOMBRE (no por coordenadas), con la descripción
