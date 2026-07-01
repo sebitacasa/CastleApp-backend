@@ -15,7 +15,12 @@ import {
   getPendingLocations, // Admin: Ver pendientes
   approveLocation,     // Admin: Aprobar
   rejectLocation       // Admin: Rechazar
-} from '../controller/googleLocationController.js'; 
+} from '../controller/googleLocationController.js';
+
+// 👇 image-proxy: se perdió al refactorizar a googleLocationController y el
+// frontend (DetailScreen) sigue dependiendo de esta ruta para poder mostrar
+// imagenes de wikimedia.org (Wikimedia bloquea el hotlinking directo).
+import { getProxyImage } from '../controller/europeanaController.js';
 
 // 2. CONTROLADOR EXTERNO (Búsqueda Manual)
 // Este maneja la pantalla de búsqueda específica ("SearchScreen").
@@ -54,6 +59,11 @@ router.get('/external/search', getGoogleLocations);
 // GET /api/locations/external/wiki?title=...
 // Uso: Botón "Leer más" para traer info detallada.
 router.get('/external/wiki', getWikiFullDetails);
+
+// GET /api/image-proxy?url=...
+// Uso: DetailScreen -- reenvía imágenes de wikimedia.org con un User-Agent
+// válido, porque Wikimedia bloquea el hotlinking directo desde la app.
+router.get('/image-proxy', getProxyImage);
 
 
 // ==========================================
