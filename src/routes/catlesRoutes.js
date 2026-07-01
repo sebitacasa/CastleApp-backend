@@ -22,6 +22,18 @@ import {
 // imagenes de wikimedia.org (Wikimedia bloquea el hotlinking directo).
 import { getProxyImage } from '../controller/europeanaController.js';
 
+// 3. APORTES DE LA COMUNIDAD (foto + info en el Detail, requiere login)
+import {
+  submitContribution,
+  getContributionForPlace,
+  getMyContribution,
+  getPendingContributions,
+  approveContribution,
+  rejectContribution,
+  setupContributionsTable
+} from '../controller/contributionController.js';
+import { verifyToken } from '../middleware/auth.js';
+
 // 2. CONTROLADOR EXTERNO (Búsqueda Manual)
 // Este maneja la pantalla de búsqueda específica ("SearchScreen").
 
@@ -78,6 +90,32 @@ router.put('/admin/approve/:id', approveLocation);
 
 // Rechazar (Borrar de la base de datos)
 router.delete('/admin/reject/:id', rejectLocation);
+
+
+// ==========================================
+// 📸 ZONA 5: APORTES DE LA COMUNIDAD (Detail)
+// ==========================================
+// Un usuario logeado puede sumar una foto y/o un texto de info a un lugar
+// existente (de Google o de la comunidad). Queda pendiente de aprobación
+// hasta que se revise a mano (mismos endpoints admin sin UI que ya existen
+// para historical_locations).
+
+// POST /api/contributions -- requiere login (verifyToken setea req.userId)
+router.post('/contributions', verifyToken, submitContribution);
+
+// GET /api/contributions?google_place_id=...|location_id=... -- público
+router.get('/contributions', getContributionForPlace);
+
+// GET /api/contributions/mine?google_place_id=...|location_id=... -- requiere login
+router.get('/contributions/mine', verifyToken, getMyContribution);
+
+// Admin: ver pendientes / aprobar / rechazar
+router.get('/admin/contributions/pending', getPendingContributions);
+router.put('/admin/contributions/approve/:id', approveContribution);
+router.delete('/admin/contributions/reject/:id', rejectContribution);
+
+// Setup de la tabla en producción (una sola vez, no hay knex migrate en el deploy)
+router.get('/setup-contributions-table', setupContributionsTable);
 
 
 // ==========================================

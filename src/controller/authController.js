@@ -3,10 +3,9 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import crypto from 'crypto'; // Importante para generar contraseñas random en Google Login
+import { SECRET_KEY } from '../config/jwtSecret.js';
 
 dotenv.config();
-
-const SECRET_KEY = process.env.JWT_SECRET || 'mi_secreto_super_seguro';
 
 // ==========================================
 // 🔥 1. LOGIN CON GOOGLE (CORREGIDO)
