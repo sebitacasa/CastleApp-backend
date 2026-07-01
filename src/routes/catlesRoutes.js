@@ -119,17 +119,33 @@ router.get('/setup-contributions-table', setupContributionsTable);
 
 
 // ==========================================
-// 🔍 DEBUG TEMPORAL (solo lectura -- sacar después de confirmar el esquema)
+// 🔧 FIX DE ESQUEMA (una sola vez): columnas faltantes en historical_locations
 // ==========================================
-// suggestLocation está fallando en producción con "column latitude of
-// relation historical_locations does not exist". Esto SOLO lee
-// information_schema (no modifica nada), igual que /auth/create-test.
-router.get('/debug-schema', async (req, res) => {
+// Confirmado via /debug-schema (ya sacado): la tabla en producción tiene
+// exactamente las columnas de la migración trackeada (id, name, category,
+// description, country, image_url, images, geom, author, license,
+// timestamps) -- pero suggestLocation, fetchFromDatabase y el resto de la
+// moderación de historical_locations dan por sentado que además existen
+// latitude, longitude, created_by_user_id, is_approved, google_place_id y
+// location_text. Nunca se crearon: por eso "sugerir lugar" tira el error
+// crudo de Postgres, y por eso el feed de "Community" siempre viene vacío
+// (fetchFromDatabase atrapa el mismo error y devuelve [] en silencio).
+// ADD COLUMN IF NOT EXISTS es aditivo/idempotente, no toca filas existentes.
+router.get('/fix-historical-locations-schema', async (req, res) => {
     try {
-        const r = await db.raw("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'historical_locations' ORDER BY ordinal_position");
-        res.json({ columns: r.rows });
+        await db.raw(`
+            ALTER TABLE historical_locations
+                ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT false,
+                ADD COLUMN IF NOT EXISTS google_place_id TEXT,
+                ADD COLUMN IF NOT EXISTS location_text TEXT
+        `);
+        res.send('✅ LISTO: columnas latitude/longitude/created_by_user_id/is_approved/google_place_id/location_text agregadas (o ya existían).');
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error(e);
+        res.status(500).send('Error agregando columnas: ' + e.message);
     }
 });
 
@@ -148,33 +164,6 @@ router.get('/nuke-db', async (req, res) => {
         res.status(500).send('Error purgado DB: ' + e.message);
     }
 });
-
-// ... (resto del archivo arriba)
-
-// ==========================================
-// 🔧 HERRAMIENTA DE REPARACIÓN (Fix DB)
-// ==========================================
-// Ejecuta esto una sola vez para arreglar los nombres de las columnas
-// router.get('/fix-db-schema', async (req, res) => {
-//     try {
-//         // 1. Intentamos renombrar 'lat' a 'latitude'
-//         // (Si falla es porque ya se llama latitude o no existe, entonces pasamos al catch)
-//         await db.raw('ALTER TABLE historical_locations RENAME COLUMN lat TO latitude');
-//         await db.raw('ALTER TABLE historical_locations RENAME COLUMN lon TO longitude');
-        
-//         res.send("✅ ÉXITO: Las columnas han sido renombradas de 'lat/lon' a 'latitude/longitude'. Ahora el mapa funcionará.");
-//     } catch (error) {
-//         // 2. Si falla lo anterior, intentamos ver si es que faltan
-//         try {
-//             // Solo las crea si no existen
-//             await db.raw('ALTER TABLE historical_locations ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION');
-//             await db.raw('ALTER TABLE historical_locations ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION');
-//             res.send("⚠️ AVISO: No se encontraron 'lat/lon', así que se crearon columnas nuevas 'latitude/longitude'.");
-//         } catch (e2) {
-//             res.status(500).send("❌ ERROR CRÍTICO: " + error.message + " | " + e2.message);
-//         }
-//     }
-// });
 
 
 
