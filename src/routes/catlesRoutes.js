@@ -119,6 +119,22 @@ router.get('/setup-contributions-table', setupContributionsTable);
 
 
 // ==========================================
+// 🔍 DEBUG TEMPORAL (solo lectura -- sacar después de confirmar el esquema)
+// ==========================================
+// suggestLocation está fallando en producción con "column latitude of
+// relation historical_locations does not exist". Esto SOLO lee
+// information_schema (no modifica nada), igual que /auth/create-test.
+router.get('/debug-schema', async (req, res) => {
+    try {
+        const r = await db.raw("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'historical_locations' ORDER BY ordinal_position");
+        res.json({ columns: r.rows });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
+// ==========================================
 // ☢️ ZONA DE PELIGRO (Utilidades)
 // ==========================================
 
