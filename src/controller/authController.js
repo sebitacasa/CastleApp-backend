@@ -7,6 +7,11 @@ import { SECRET_KEY } from '../config/jwtSecret.js';
 
 dotenv.config();
 
+// Client ID de OAuth (proyecto CastleApp). Solo se aceptan idTokens emitidos para esta app.
+const GOOGLE_CLIENT_ID =
+    process.env.GOOGLE_CLIENT_ID ||
+    '51752012600-igpkoafe26206ti3ie5bmnlln5gn1psc.apps.googleusercontent.com';
+
 // ==========================================
 // 🔥 1. LOGIN CON GOOGLE (CORREGIDO)
 // ==========================================
@@ -30,6 +35,13 @@ export const googleLogin = async (req, res) => {
         }
 
         const googleUser = await googleResponse.json();
+
+        // Rechazar tokens válidos de Google pero emitidos para otra app (audience distinta)
+        if (googleUser.aud !== GOOGLE_CLIENT_ID) {
+            console.error("❌ [Backend] Token con audience desconocida:", googleUser.aud);
+            return res.status(401).json({ message: 'Token de Google no emitido para esta app' });
+        }
+
         const { email, picture } = googleUser;
         // A veces el nombre viene en 'name' o 'given_name'
         const name = googleUser.name || googleUser.given_name; 
