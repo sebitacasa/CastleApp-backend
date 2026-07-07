@@ -431,7 +431,7 @@ async function searchNearbyByTypes(lat, lon, radius, types) {
         const headers = {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.types,places.primaryType'
         };
         const response = await axios.post(url, requestBody, { headers });
         return response.data.places || [];
@@ -460,7 +460,7 @@ async function fetchFromGoogle(lat, lon, radius, category) {
 
         if (isInvalidContext(pName)) return null;
 
-        let finalDesc = p.editorialSummary?.text || p.formattedAddress;
+        let finalDesc = p.formattedAddress;
         let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
         let wikiTitle = null;
 
@@ -575,7 +575,7 @@ export const getGoogleLocations = async (req, res) => {
         const headers = {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.editorialSummary,places.types,places.primaryType'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.photos,places.types,places.primaryType'
         };
 
         const response = await axios.post(url, requestBody, { headers });
@@ -588,7 +588,7 @@ export const getGoogleLocations = async (req, res) => {
 
             if (isInvalidContext(pName)) return null;
 
-            let finalDesc = p.editorialSummary?.text || p.formattedAddress;
+            let finalDesc = p.formattedAddress;
             let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
             let wikiTitle = null;
 
