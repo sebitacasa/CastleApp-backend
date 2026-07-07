@@ -461,8 +461,14 @@ async function fetchFromGoogle(lat, lon, radius, category) {
         if (isInvalidContext(pName)) return null;
 
         let finalDesc = p.formattedAddress;
-        let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
+        const photoName = p.photos?.[0]?.name;
+        let finalImage = photoName
+            ? `https://places.googleapis.com/v1/${photoName}/media?key=${GOOGLE_API_KEY}&maxHeightPx=800&maxWidthPx=800`
+            : null;
         let imageSource = finalImage ? 'google' : null;
+        if (!photoName) {
+            console.log(`📸 sin foto Google para "${pName}" (primaryType=${p.primaryType}, photos=${JSON.stringify(p.photos?.slice(0,1))})`);
+        }
         let wikiTitle = null;
 
         const countryCode = extractCountryCode(p.addressComponents);
