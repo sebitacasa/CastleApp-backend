@@ -462,13 +462,17 @@ async function fetchFromGoogle(lat, lon, radius, category) {
 
         let finalDesc = p.formattedAddress;
         let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
+        let imageSource = finalImage ? 'google' : null;
         let wikiTitle = null;
 
         const countryCode = extractCountryCode(p.addressComponents);
         const wikiData = await getWikipediaByName(pName, countryCode);
         if (wikiData) {
             if (wikiData.description) finalDesc = wikiData.description;
-            if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
+            if (!finalImage && wikiData.imageUrl) {
+                finalImage = wikiData.imageUrl;
+                imageSource = 'wikipedia';
+            }
             wikiTitle = wikiData.title;
         }
 
@@ -485,7 +489,8 @@ async function fetchFromGoogle(lat, lon, radius, category) {
             description: finalDesc,
             latitude: pLat,
             longitude: pLon,
-            image_url: finalImage || 'https://via.placeholder.com/400x300',
+            image_url: finalImage || null,
+            image_source: imageSource,
             category: detectedCat,
             source: 'google',
             google_place_id: p.id,
@@ -590,13 +595,17 @@ export const getGoogleLocations = async (req, res) => {
 
             let finalDesc = p.formattedAddress;
             let finalImage = p.photos?.[0] ? `https://places.googleapis.com/v1/${p.photos[0].name}/media?key=${GOOGLE_API_KEY}&maxHeightPx=600&maxWidthPx=600` : null;
+            let imageSource = finalImage ? 'google' : null;
             let wikiTitle = null;
 
             const countryCode = extractCountryCode(p.addressComponents);
             const wikiData = await getWikipediaByName(pName, countryCode);
             if (wikiData) {
                 if (wikiData.description) finalDesc = wikiData.description;
-                if (!finalImage && wikiData.imageUrl) finalImage = wikiData.imageUrl;
+                if (!finalImage && wikiData.imageUrl) {
+                    finalImage = wikiData.imageUrl;
+                    imageSource = 'wikipedia';
+                }
                 wikiTitle = wikiData.title;
             }
 
@@ -609,7 +618,8 @@ export const getGoogleLocations = async (req, res) => {
 
             return {
                 id: p.id, name: pName, description: finalDesc, latitude: pLat, longitude: pLon,
-                image_url: finalImage || 'https://via.placeholder.com/400x300',
+                image_url: finalImage || null,
+                image_source: imageSource,
                 category: detectedCat,
                 source: 'google', google_place_id: p.id,
                 address: p.formattedAddress, country: shortAddress, country_code: countryCode, wiki_title: wikiTitle
