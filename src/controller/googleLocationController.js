@@ -18,6 +18,29 @@ const WIKI_OPTS = {
 };
 
 // ==========================================
+// 🗄️ CACHE EN MEMORIA PARA RESULTADOS DE GOOGLE
+// ==========================================
+// Google Nearby Search no soporta paginación (no hay pageToken), así que
+// buscamos todos los lugares de una vez y los cacheamos en el servidor.
+// Cada scroll del usuario recibe los siguientes 20 lugares del cache en vez
+// de disparar una nueva llamada a Google — más barato y más rápido.
+const PLACES_CACHE = new Map();
+const PLACES_CACHE_TTL = 10 * 60 * 1000; // 10 minutos
+
+function getPlacesCache(key) {
+    const entry = PLACES_CACHE.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.ts > PLACES_CACHE_TTL) { PLACES_CACHE.delete(key); return null; }
+    return entry.data;
+}
+
+function setPlacesCache(key, data) {
+    PLACES_CACHE.set(key, { data, ts: Date.now() });
+    // Evitar crecimiento ilimitado: máximo 200 entradas (cada una ~10 lugares × 80 = poco)
+    if (PLACES_CACHE.size > 200) PLACES_CACHE.delete(PLACES_CACHE.keys().next().value);
+}
+
+// ==========================================
 // 🏰 TIPOS DE GOOGLE PLACES (API NUEVA) POR CATEGORÍA
 // ==========================================
 // Solo tipos estrictamente históricos/culturales + religiosos.
@@ -302,36 +325,45 @@ export const getLocations = async (req, res) => {
   const { lat, lon, category } = req.query;
   const targetCategory = category || 'All';
   const currentPage = parseInt(req.query.page, 10) || 1;
+  const shouldRefresh = req.query.refresh === '1';
 
-  // 🌍 Nearby Search admite hasta 50km de radio (es el máximo permitido por Google)
   const googleRadius = 50000;
+  const PAGE_SIZE = 20;
 
   if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas (lat, lon)" });
 
+  // Clave de cache con precisión ~1km (2 decimales) para reutilizar entre
+  // requests cercanos del mismo usuario sin disparar múltiples llamadas a Google.
+  const cacheKey = `${parseFloat(lat).toFixed(2)}_${parseFloat(lon).toFixed(2)}_${targetCategory}`;
+  if (shouldRefresh) PLACES_CACHE.delete(cacheKey);
+
   try {
-    // 💡 1. Paginación en la Base de Datos (ya viene acotada a 50km por la
-    // formula de Haversine en el WHERE de fetchFromDatabase — un lugar
-    // subido en Haag nunca puede aparecer para alguien a 1300km en Barcelona).
+    // 1. DB: siempre paginada (haversine garantiza radio 50km — Haag nunca
+    //    aparece en Barcelona).
     const dbResults = await fetchFromDatabase(lat, lon, 50, currentPage);
 
-    // 💡 2. Google Nearby Search (Places API New no soporta pageToken en Nearby Search,
-    // así que solo se consulta en la página 1; las siguientes páginas solo paginan la DB)
-    // La categoría "Community" es 100% lugares subidos por usuarios (dbResults),
-    // así que ni vale la pena pedirle nada a Google para ese caso.
-    let googlePlaces = [];
-    if (currentPage === 1 && targetCategory !== 'Community') {
-        googlePlaces = await fetchFromGoogle(lat, lon, googleRadius, targetCategory);
+    // 2. Google: se buscan todos los lugares UNA SOLA VEZ y se cachean.
+    //    Las páginas siguientes reciben el siguiente slice del cache sin
+    //    llamar a Google de nuevo — más barato y sin duplicados.
+    let allGooglePlaces = [];
+    if (targetCategory !== 'Community') {
+        allGooglePlaces = getPlacesCache(cacheKey);
+        if (!allGooglePlaces) {
+            allGooglePlaces = await fetchFromGoogle(lat, lon, googleRadius, targetCategory);
+            setPlacesCache(cacheKey, allGooglePlaces);
+        }
     }
 
-    const combined = [...dbResults, ...googlePlaces];
+    // Slice de la página actual de resultados de Google
+    const googleOffset = (currentPage - 1) * PAGE_SIZE;
+    const googlePage   = allGooglePlaces.slice(googleOffset, googleOffset + PAGE_SIZE);
+
+    const combined = [...dbResults, ...googlePage];
 
     let filtered;
     if (targetCategory === 'All') {
         filtered = combined;
     } else if (targetCategory === 'Community') {
-        // 🐛 Antes el frontend ni mandaba ?category=Community (lo trataba como
-        // "sin filtro"), así que esta pestaña mostraba TODO (DB + Google)
-        // mezclado en vez de aislar solo los lugares de la comunidad.
         filtered = combined.filter(item => item.source === 'db');
     } else {
         filtered = combined.filter(item => item.category === targetCategory);
@@ -354,9 +386,13 @@ export const getLocations = async (req, res) => {
         });
     }
 
+    // Hay más si la DB todavía tiene resultados O si quedan páginas de Google
+    const googleHasMore = googleOffset + PAGE_SIZE < allGooglePlaces.length;
+    const dbHasMore     = dbResults.length === PAGE_SIZE;
+
     res.json({
         data: filtered,
-        nextGoogleToken: null
+        nextGoogleToken: (googleHasMore || dbHasMore) ? 'more' : null
     });
 
   } catch (error) {
