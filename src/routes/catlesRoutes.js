@@ -30,7 +30,8 @@ import {
   getPendingContributions,
   approveContribution,
   rejectContribution,
-  setupContributionsTable
+  setupContributionsTable,
+  getMyDiscoveries
 } from '../controller/contributionController.js';
 import { verifyToken } from '../middleware/auth.js';
 
@@ -108,6 +109,9 @@ router.get('/contributions', getContributionForPlace);
 
 // GET /api/contributions/mine?google_place_id=...|location_id=... -- requiere login
 router.get('/contributions/mine', verifyToken, getMyContribution);
+
+// GET /api/contributions/my-discoveries -- lugares creados + aportes del usuario
+router.get('/contributions/my-discoveries', verifyToken, getMyDiscoveries);
 
 // Admin: ver pendientes / aprobar / rechazar
 router.get('/admin/contributions/pending', getPendingContributions);

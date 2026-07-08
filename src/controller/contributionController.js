@@ -113,7 +113,45 @@ export const getMyContribution = async (req, res) => {
 };
 
 // ==========================================
-// 🛡️ 4. ADMIN (mismo patron minimalista que los de historical_locations)
+// 🔎 4. TODOS MIS APORTES + MIS LUGARES CREADOS (requiere login)
+// ==========================================
+export const getMyDiscoveries = async (req, res) => {
+    try {
+        const userId = req.userId;
+
+        // Lugares creados por el usuario en historical_locations
+        const placesResult = await db.raw(
+            `SELECT id, name, description, image_url, category, latitude, longitude, created_at
+             FROM historical_locations
+             WHERE created_by_user_id = ?
+             ORDER BY created_at DESC`,
+            [userId]
+        );
+
+        // Aportes (fotos/info) subidos por el usuario a cualquier lugar
+        const contribsResult = await db.raw(
+            `SELECT lc.id, lc.photo_url, lc.info_text, lc.is_approved, lc.created_at,
+                    lc.google_place_id, lc.location_id,
+                    hl.name AS place_name
+             FROM location_contributions lc
+             LEFT JOIN historical_locations hl ON hl.id = lc.location_id
+             WHERE lc.user_id = ?
+             ORDER BY lc.created_at DESC`,
+            [userId]
+        );
+
+        res.json({
+            places: placesResult.rows,
+            contributions: contribsResult.rows,
+        });
+    } catch (e) {
+        console.error('Error en getMyDiscoveries:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+};
+
+// ==========================================
+// 🛡️ 5. ADMIN (mismo patron minimalista que los de historical_locations)
 // ==========================================
 export const getPendingContributions = async (req, res) => {
     try { const r = await db.raw('SELECT * FROM location_contributions WHERE is_approved = FALSE ORDER BY created_at DESC'); res.json(r.rows); }
