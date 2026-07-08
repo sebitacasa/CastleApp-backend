@@ -350,6 +350,15 @@ export const getLocations = async (req, res) => {
         allGooglePlaces = getPlacesCache(cacheKey);
         if (!allGooglePlaces) {
             allGooglePlaces = await fetchFromGoogle(lat, lon, googleRadius, targetCategory);
+            // Sort by distance so mixed-category pages don't front-load a single
+            // category (e.g. all castles before any museums or churches).
+            const latNum = parseFloat(lat);
+            const lonNum = parseFloat(lon);
+            allGooglePlaces.sort((a, b) => {
+                const dA = Math.hypot((a.latitude || 0) - latNum, (a.longitude || 0) - lonNum);
+                const dB = Math.hypot((b.latitude || 0) - latNum, (b.longitude || 0) - lonNum);
+                return dA - dB;
+            });
             setPlacesCache(cacheKey, allGooglePlaces);
         }
     }
