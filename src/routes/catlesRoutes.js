@@ -42,7 +42,7 @@ import {
     getMyRank,
 } from '../controller/conquestController.js';
 import {
-    setupFriendshipsTables,
+    setupFriendshipsTables, setupPushTokenColumn, updatePushToken,
     getMyUsername, checkUsername, updateUsername,
     searchUsers,
     sendFriendRequest, getMyFriends, getPendingRequests,
@@ -140,6 +140,8 @@ router.get('/setup-contributions-table', setupContributionsTable);
 // ==========================================
 router.get('/setup-conquests-table', setupConquestsTable);
 router.get('/setup-friendships-table', setupFriendshipsTables);
+router.get('/setup-push-token-column', setupPushTokenColumn);
+router.put('/push-token', verifyToken, updatePushToken);
 router.post('/conquests', verifyToken, conquerPlace);
 router.get('/conquests/mine', verifyToken, getMyConquests);
 router.get('/conquests/check', verifyToken, checkConquest);

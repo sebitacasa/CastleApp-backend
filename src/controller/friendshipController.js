@@ -3,6 +3,50 @@ import { getRank } from './conquestController.js';
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
 
+// ─── Expo Push helper ─────────────────────────────────────────────────────────
+async function sendPush(userId, title, body, data = {}) {
+    try {
+        const r = await db.raw('SELECT push_token FROM users WHERE id = ?', [userId]);
+        const token = r.rows[0]?.push_token;
+        if (!token) return;
+        await fetch('https://exp.host/--/expo-push/v2/push/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ to: token, title, body, data, sound: 'default' }),
+        });
+    } catch (e) {
+        console.error('[push]', e.message);
+    }
+}
+
+async function displayName(userId) {
+    const r = await db.raw('SELECT name, username FROM users WHERE id = ?', [userId]);
+    const u = r.rows[0];
+    return u?.username ? `@${u.username}` : (u?.name || 'Someone');
+}
+
+// ─── Setup: push_token column ─────────────────────────────────────────────────
+export const setupPushTokenColumn = async (req, res) => {
+    try {
+        await db.raw(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT`);
+        res.send('✅ push_token column added (or already existed).');
+    } catch (e) {
+        res.status(500).send('Error: ' + e.message);
+    }
+};
+
+// ─── Save / update push token for logged-in user ─────────────────────────────
+export const updatePushToken = async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Missing token' });
+    try {
+        await db.raw('UPDATE users SET push_token = ? WHERE id = ?', [token, req.userId]);
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+};
+
 // ─── Setup: friendships table + username column on users ──────────────────────
 export const setupFriendshipsTables = async (req, res) => {
     try {
@@ -130,6 +174,11 @@ export const sendFriendRequest = async (req, res) => {
             [requesterId, addresseeId]
         );
         res.json({ friendship: r.rows[0] });
+
+        // Notify addressee (fire-and-forget)
+        displayName(requesterId).then(name =>
+            sendPush(addresseeId, '🤝 Friend Request', `${name} sent you a friend request`, { screen: 'Friends', tab: 'requests' })
+        );
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -194,6 +243,11 @@ export const respondToRequest = async (req, res) => {
         if (action === 'accept') {
             await db.raw(`UPDATE friendships SET status = 'accepted' WHERE id = ?`, [id]);
             res.json({ status: 'accepted' });
+
+            // Notify the original requester (fire-and-forget)
+            displayName(me).then(name =>
+                sendPush(existing.rows[0].requester_id, '🎉 Friend accepted!', `${name} accepted your friend request`, { screen: 'Friends', tab: 'friends' })
+            );
         } else {
             await db.raw(`DELETE FROM friendships WHERE id = ?`, [id]);
             res.json({ status: 'rejected' });
