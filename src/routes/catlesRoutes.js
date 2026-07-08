@@ -41,6 +41,13 @@ import {
     checkConquest,
     getMyRank,
 } from '../controller/conquestController.js';
+import {
+    setupFriendshipsTables,
+    getMyUsername, checkUsername, updateUsername,
+    searchUsers,
+    sendFriendRequest, getMyFriends, getPendingRequests,
+    respondToRequest, removeFriend, getFriendConquests,
+} from '../controller/friendshipController.js';
 
 // 2. CONTROLADOR EXTERNO (Búsqueda Manual)
 // Este maneja la pantalla de búsqueda específica ("SearchScreen").
@@ -132,10 +139,29 @@ router.get('/setup-contributions-table', setupContributionsTable);
 // ⚔️ CONQUISTAS
 // ==========================================
 router.get('/setup-conquests-table', setupConquestsTable);
+router.get('/setup-friendships-table', setupFriendshipsTables);
 router.post('/conquests', verifyToken, conquerPlace);
 router.get('/conquests/mine', verifyToken, getMyConquests);
 router.get('/conquests/check', verifyToken, checkConquest);
 router.get('/conquests/rank', verifyToken, getMyRank);
+
+// ==========================================
+// 👤 USERNAME
+// ==========================================
+router.get('/username', verifyToken, getMyUsername);
+router.get('/username/check', verifyToken, checkUsername);
+router.put('/username', verifyToken, updateUsername);
+
+// ==========================================
+// 🤝 FRIENDS
+// ==========================================
+router.get('/friends', verifyToken, getMyFriends);
+router.get('/friends/search', verifyToken, searchUsers);
+router.get('/friends/requests', verifyToken, getPendingRequests);
+router.post('/friends/request', verifyToken, sendFriendRequest);
+router.put('/friends/request/:id', verifyToken, respondToRequest);
+router.delete('/friends/:id', verifyToken, removeFriend);
+router.get('/friends/:userId/conquests', verifyToken, getFriendConquests);
 
 
 // ==========================================
