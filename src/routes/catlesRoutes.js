@@ -34,6 +34,13 @@ import {
   getMyDiscoveries
 } from '../controller/contributionController.js';
 import { verifyToken } from '../middleware/auth.js';
+import {
+    setupConquestsTable,
+    conquerPlace,
+    getMyConquests,
+    checkConquest,
+    getMyRank,
+} from '../controller/conquestController.js';
 
 // 2. CONTROLADOR EXTERNO (Búsqueda Manual)
 // Este maneja la pantalla de búsqueda específica ("SearchScreen").
@@ -120,6 +127,15 @@ router.delete('/admin/contributions/reject/:id', rejectContribution);
 
 // Setup de la tabla en producción (una sola vez, no hay knex migrate en el deploy)
 router.get('/setup-contributions-table', setupContributionsTable);
+
+// ==========================================
+// ⚔️ CONQUISTAS
+// ==========================================
+router.get('/setup-conquests-table', setupConquestsTable);
+router.post('/conquests', verifyToken, conquerPlace);
+router.get('/conquests/mine', verifyToken, getMyConquests);
+router.get('/conquests/check', verifyToken, checkConquest);
+router.get('/conquests/rank', verifyToken, getMyRank);
 
 
 // ==========================================
