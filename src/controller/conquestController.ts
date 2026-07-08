@@ -1,9 +1,17 @@
+import { Request, Response } from 'express';
 import db from '../config/db.js';
 
+export interface Rank {
+    title: string;
+    emoji: string;
+    next: string | null;
+    nextCount: number | null;
+}
+
 // ─── Haversine: distancia en metros entre dos puntos GPS ──────────────────────
-function distanceMeters(lat1, lon1, lat2, lon2) {
+function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371000;
-    const toRad = d => (d * Math.PI) / 180;
+    const toRad = (d: number) => (d * Math.PI) / 180;
     const dLat = toRad(lat2 - lat1);
     const dLon = toRad(lon2 - lon1);
     const a =
@@ -13,8 +21,8 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
 }
 
 // ─── Rango medieval según número de conquistas ────────────────────────────────
-export function getRank(count) {
-    if (count >= 100) return { title: 'High King',  emoji: '👑', next: null,  nextCount: null };
+export function getRank(count: number): Rank {
+    if (count >= 100) return { title: 'High King',  emoji: '👑', next: null,      nextCount: null };
     if (count >= 50)  return { title: 'Duke',       emoji: '🏰', next: 'High King', nextCount: 100 };
     if (count >= 30)  return { title: 'Count',      emoji: '⚔️', next: 'Duke',     nextCount: 50 };
     if (count >= 15)  return { title: 'Baron',      emoji: '🛡️', next: 'Count',    nextCount: 30 };
@@ -23,44 +31,25 @@ export function getRank(count) {
     return               { title: 'Peasant',    emoji: '🌾', next: 'Squire',   nextCount: 1 };
 }
 
-// ─── 1. Setup tabla (idempotente, llámalo una vez en producción) ──────────────
-export const setupConquestsTable = async (req, res) => {
-    try {
-        await db.raw(`
-            CREATE TABLE IF NOT EXISTS conquests (
-                id               serial PRIMARY KEY,
-                user_id          integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                google_place_id  text    NULL,
-                location_id      integer NULL REFERENCES historical_locations(id) ON DELETE CASCADE,
-                place_name       text    NOT NULL DEFAULT '',
-                place_lat        double precision NOT NULL,
-                place_lon        double precision NOT NULL,
-                user_lat         double precision NOT NULL,
-                user_lon         double precision NOT NULL,
-                image_url        text    NULL,
-                category         text    NULL,
-                conquered_at     timestamptz NOT NULL DEFAULT now(),
-                UNIQUE (user_id, google_place_id),
-                UNIQUE (user_id, location_id)
-            )
-        `);
-        res.send('✅ tabla conquests creada (o ya existía).');
-    } catch (e) {
-        console.error(e);
-        res.status(500).send('Error: ' + e.message);
-    }
-};
-
-// ─── 2. Conquistar un lugar ────────────────────────────────────────────────────
-// Valida que el usuario esté a ≤150m del lugar antes de guardar.
-export const conquerPlace = async (req, res) => {
+// ─── 1. Conquistar un lugar ────────────────────────────────────────────────────
+export const conquerPlace = async (req: Request, res: Response) => {
     const userId = req.userId;
     const {
         google_place_id, location_id,
         place_name, place_lat, place_lon,
         user_lat, user_lon,
         image_url, category
-    } = req.body;
+    } = req.body as {
+        google_place_id?: string;
+        location_id?: number;
+        place_name?: string;
+        place_lat?: string | number;
+        place_lon?: string | number;
+        user_lat?: string | number;
+        user_lon?: string | number;
+        image_url?: string;
+        category?: string;
+    };
 
     if (!place_lat || !place_lon || !user_lat || !user_lon) {
         return res.status(400).json({ error: 'Missing coordinates' });
@@ -70,8 +59,8 @@ export const conquerPlace = async (req, res) => {
     }
 
     const dist = distanceMeters(
-        parseFloat(user_lat), parseFloat(user_lon),
-        parseFloat(place_lat), parseFloat(place_lon)
+        parseFloat(String(user_lat)), parseFloat(String(user_lon)),
+        parseFloat(String(place_lat)), parseFloat(String(place_lon))
     );
 
     if (dist > 150) {
@@ -83,16 +72,15 @@ export const conquerPlace = async (req, res) => {
     }
 
     try {
-        // Upsert — si ya existe, actualiza la fecha (re-conquista)
-        const placeIdCol  = google_place_id ? 'google_place_id' : 'location_id';
-        const placeIdVal  = google_place_id || location_id;
+        const placeIdCol = google_place_id ? 'google_place_id' : 'location_id';
+        const placeIdVal = google_place_id || location_id;
 
         const existing = await db.raw(
             `SELECT id FROM conquests WHERE user_id = ? AND ${placeIdCol} = ?`,
             [userId, placeIdVal]
         );
 
-        let conquest;
+        let conquest: unknown;
         if (existing.rows.length > 0) {
             const updated = await db.raw(
                 `UPDATE conquests SET conquered_at = now(), user_lat = ?, user_lon = ?
@@ -120,36 +108,37 @@ export const conquerPlace = async (req, res) => {
             conquest = inserted.rows[0];
         }
 
-        // Devuelve también el rango actualizado
         const countResult = await db.raw(
             'SELECT COUNT(*)::int AS total FROM conquests WHERE user_id = ?', [userId]
         );
-        const total = countResult.rows[0].total;
+        const total: number = countResult.rows[0].total;
 
         res.json({ conquest, total, rank: getRank(total) });
     } catch (e) {
-        console.error('conquerPlace error:', e.message);
-        res.status(500).json({ error: e.message });
+        const err = e as Error;
+        console.error('conquerPlace error:', err.message);
+        res.status(500).json({ error: err.message });
     }
 };
 
 // ─── 3. Mis conquistas ────────────────────────────────────────────────────────
-export const getMyConquests = async (req, res) => {
+export const getMyConquests = async (req: Request, res: Response) => {
     try {
         const result = await db.raw(
             `SELECT * FROM conquests WHERE user_id = ? ORDER BY conquered_at DESC`,
             [req.userId]
         );
-        const total = result.rows.length;
+        const total: number = result.rows.length;
         res.json({ conquests: result.rows, total, rank: getRank(total) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        const err = e as Error;
+        res.status(500).json({ error: err.message });
     }
 };
 
 // ─── 4. Verificar si ya conquisté un lugar ───────────────────────────────────
-export const checkConquest = async (req, res) => {
-    const { google_place_id, location_id } = req.query;
+export const checkConquest = async (req: Request, res: Response) => {
+    const { google_place_id, location_id } = req.query as { google_place_id?: string; location_id?: string };
     const col = google_place_id ? 'google_place_id' : 'location_id';
     const val = google_place_id || location_id;
     if (!val) return res.status(400).json({ error: 'Missing id' });
@@ -161,19 +150,21 @@ export const checkConquest = async (req, res) => {
         );
         res.json({ conquered: r.rows.length > 0, conquest: r.rows[0] || null });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        const err = e as Error;
+        res.status(500).json({ error: err.message });
     }
 };
 
 // ─── 5. Mi perfil (count + rank) ─────────────────────────────────────────────
-export const getMyRank = async (req, res) => {
+export const getMyRank = async (req: Request, res: Response) => {
     try {
         const r = await db.raw(
             'SELECT COUNT(*)::int AS total FROM conquests WHERE user_id = ?', [req.userId]
         );
-        const total = r.rows[0].total;
+        const total: number = r.rows[0].total;
         res.json({ total, rank: getRank(total) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        const err = e as Error;
+        res.status(500).json({ error: err.message });
     }
 };

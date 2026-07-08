@@ -1,11 +1,12 @@
+import { Request, Response } from 'express';
 import db from '../config/db.js';
 
 // ==========================================
-// 1. 🔍 BUSCADOR DE AMIGOS
+// 1. BUSCADOR DE AMIGOS
 // ==========================================
-export const searchUsers = async (req, res) => {
+export const searchUsers = async (req: Request, res: Response) => {
     const { q } = req.query;
-    const myId = 1; // ⚠️ ID FIJO TEMPORAL
+    const myId = 1; // ID FIJO TEMPORAL
 
     if (!q) return res.json([]);
 
@@ -15,39 +16,40 @@ export const searchUsers = async (req, res) => {
             .andWhereNot('id', myId)
             .select('id', 'username', 'avatar_url')
             .limit(10);
-        
-        const myFollows = await db('follows')
+
+        const myFollows: number[] = await db('follows')
             .where('follower_id', myId)
             .pluck('following_id');
 
-        const results = users.map(user => ({
+        const results = users.map((user: { id: number; username: string; avatar_url: string | null }) => ({
             ...user,
             isFollowing: myFollows.includes(user.id)
         }));
 
         res.json(results);
     } catch (error) {
-        console.error("Error buscando usuarios:", error);
+        console.error('Error buscando usuarios:', error);
         res.status(500).json({ error: 'Error buscando usuarios' });
     }
 };
 
 // ==========================================
-// 2. ➕ SEGUIR A ALGUIEN
+// 2. SEGUIR A ALGUIEN
 // ==========================================
-export const followUser = async (req, res) => {
-    const follower_id = 1; // ⚠️ ID FIJO TEMPORAL
+export const followUser = async (req: Request, res: Response) => {
+    const follower_id = 1; // ID FIJO TEMPORAL
     const following_id = req.params.id;
 
-    if (follower_id == following_id) {
-        return res.status(400).json({ error: "No puedes seguirte a ti mismo" });
+    if (String(follower_id) === String(following_id)) {
+        return res.status(400).json({ error: 'No puedes seguirte a ti mismo' });
     }
 
     try {
         await db('follows').insert({ follower_id, following_id });
         res.json({ success: true, message: 'Usuario seguido correctamente' });
     } catch (error) {
-        if (error.code === '23505') {
+        const pgError = error as { code?: string };
+        if (pgError.code === '23505') {
             return res.status(400).json({ error: 'Ya sigues a este usuario' });
         }
         res.status(500).json({ error: 'Error al seguir usuario' });
@@ -55,10 +57,10 @@ export const followUser = async (req, res) => {
 };
 
 // ==========================================
-// 3. ➖ DEJAR DE SEGUIR
+// 3. DEJAR DE SEGUIR
 // ==========================================
-export const unfollowUser = async (req, res) => {
-    const follower_id = 1; // ⚠️ ID FIJO TEMPORAL
+export const unfollowUser = async (req: Request, res: Response) => {
+    const follower_id = 1; // ID FIJO TEMPORAL
     const following_id = req.params.id;
 
     try {
@@ -67,15 +69,16 @@ export const unfollowUser = async (req, res) => {
             .del();
         res.json({ success: true, message: 'Has dejado de seguir al usuario' });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Error al dejar de seguir' });
     }
 };
 
 // ==========================================
-// 4. ✅ MARCAR LUGAR VISITADO (CHECK-IN)
+// 4. MARCAR LUGAR VISITADO (CHECK-IN)
 // ==========================================
-export const registerVisit = async (req, res) => {
-    const user_id = 1; // ⚠️ ID FIJO TEMPORAL
+export const registerVisit = async (req: Request, res: Response) => {
+    const user_id = 1; // ID FIJO TEMPORAL
     const location_id = req.params.locationId;
 
     try {
@@ -84,8 +87,8 @@ export const registerVisit = async (req, res) => {
             .first();
 
         if (!exists) {
-            await db('visited_places').insert({ 
-                user_id, 
+            await db('visited_places').insert({
+                user_id,
                 location_id,
                 visited_at: db.fn.now()
             });
@@ -94,16 +97,16 @@ export const registerVisit = async (req, res) => {
             res.json({ success: true, message: 'Ya habías visitado este lugar' });
         }
     } catch (error) {
-        console.error("Error marcando visita:", error);
+        console.error('Error marcando visita:', error);
         res.status(500).json({ error: 'Error al marcar visita' });
     }
 };
 
 // ==========================================
-// 5. 🌎 FEED SOCIAL (Actividad de Amigos)
+// 5. FEED SOCIAL (Actividad de Amigos)
 // ==========================================
-export const getSocialFeed = async (req, res) => {
-    const myId = 1; // ⚠️ ID FIJO TEMPORAL
+export const getSocialFeed = async (req: Request, res: Response) => {
+    const myId = 1; // ID FIJO TEMPORAL
 
     try {
         const feed = await db('visited_places as vp')
@@ -126,21 +129,25 @@ export const getSocialFeed = async (req, res) => {
 
         res.json(feed);
     } catch (error) {
-        console.error("Error cargando feed:", error);
+        console.error('Error cargando feed:', error);
         res.status(500).json({ error: 'Error cargando feed' });
     }
 };
 
 // ==========================================
-// 6. 🗺️ MIS VISITAS (Para el Mapa)
+// 6. MIS VISITAS (Para el Mapa)
 // ==========================================
-export const getMyVisits = async (req, res) => {
-    const myId = 1; // ⚠️ ID FIJO TEMPORAL
+export const getMyVisits = async (req: Request, res: Response) => {
+    const myId = 1; // ID FIJO TEMPORAL
     try {
         const places = await db('visited_places as vp')
             .join('historical_locations as l', 'vp.location_id', 'l.id')
             .where('vp.user_id', myId)
-            .select('l.id', 'l.name', 'l.category', 'l.country', 'l.image_url', db.raw('ST_X(l.geom) as lon'), db.raw('ST_Y(l.geom) as lat'));
+            .select(
+                'l.id', 'l.name', 'l.category', 'l.country', 'l.image_url',
+                db.raw('ST_X(l.geom) as lon'),
+                db.raw('ST_Y(l.geom) as lat')
+            );
         res.json(places);
     } catch (error) {
         console.error(error);
@@ -149,15 +156,19 @@ export const getMyVisits = async (req, res) => {
 };
 
 // ==========================================
-// 7. 🗺️ VISITAS DE AMIGO (Para el VS)
+// 7. VISITAS DE AMIGO (Para el VS)
 // ==========================================
-export const getFriendVisits = async (req, res) => {
+export const getFriendVisits = async (req: Request, res: Response) => {
     const userId = req.params.id;
     try {
         const places = await db('visited_places as vp')
             .join('historical_locations as l', 'vp.location_id', 'l.id')
             .where('vp.user_id', userId)
-            .select('l.id', 'l.name', 'l.category', 'l.country', 'l.image_url', db.raw('ST_X(l.geom) as lon'), db.raw('ST_Y(l.geom) as lat'));
+            .select(
+                'l.id', 'l.name', 'l.category', 'l.country', 'l.image_url',
+                db.raw('ST_X(l.geom) as lon'),
+                db.raw('ST_Y(l.geom) as lat')
+            );
         res.json(places);
     } catch (error) {
         console.error(error);
