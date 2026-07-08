@@ -27,9 +27,9 @@ async function sendPush(
 }
 
 async function displayName(userId: number): Promise<string> {
-    const r = await db.raw('SELECT name, username FROM users WHERE id = ?', [userId]);
-    const u = r.rows[0] as { name?: string; username?: string } | undefined;
-    return u?.username ? `@${u.username}` : (u?.name || 'Someone');
+    const r = await db.raw('SELECT username FROM users WHERE id = ?', [userId]);
+    const u = r.rows[0] as { username?: string } | undefined;
+    return u?.username ? `@${u.username}` : 'Someone';
 }
 
 // ─── Save / update push token for logged-in user ─────────────────────────────
@@ -103,8 +103,7 @@ export const searchUsers = async (req: Request, res: Response) => {
             SELECT
                 u.id,
                 u.username,
-                u.name,
-                u.picture AS avatar,
+                u.avatar_url AS avatar,
                 COALESCE(f.status, 'none') AS friendship_status,
                 f.id AS friendship_id,
                 f.requester_id
@@ -114,12 +113,12 @@ export const searchUsers = async (req: Request, res: Response) => {
                 (f.addressee_id = ? AND f.requester_id = u.id)
             )
             WHERE u.id != ?
-              AND (u.username ILIKE ? OR u.name ILIKE ?)
+              AND u.username ILIKE ?
             ORDER BY
                 CASE WHEN LOWER(u.username) = LOWER(?) THEN 0 ELSE 1 END,
                 u.username NULLS LAST
             LIMIT 20
-        `, [me, me, me, like, like, q.trim()]);
+        `, [me, me, me, like, q.trim()]);
         res.json({ users: r.rows });
     } catch (e) {
         const err = e as Error;
@@ -167,8 +166,7 @@ export const getMyFriends = async (req: Request, res: Response) => {
             SELECT
                 u.id,
                 u.username,
-                u.name,
-                u.picture AS avatar,
+                u.avatar_url AS avatar,
                 f.id AS friendship_id,
                 COUNT(c.id)::int AS conquest_count
             FROM friendships f
@@ -179,8 +177,8 @@ export const getMyFriends = async (req: Request, res: Response) => {
             LEFT JOIN conquests c ON c.user_id = u.id
             WHERE (f.requester_id = ? OR f.addressee_id = ?)
               AND f.status = 'accepted'
-            GROUP BY u.id, u.username, u.name, u.picture, f.id
-            ORDER BY conquest_count DESC, u.name
+            GROUP BY u.id, u.username, u.avatar_url, f.id
+            ORDER BY conquest_count DESC, u.username
         `, [me, me, me]);
         res.json({ friends: r.rows });
     } catch (e) {
@@ -195,7 +193,7 @@ export const getPendingRequests = async (req: Request, res: Response) => {
         const r = await db.raw(`
             SELECT
                 f.id, f.created_at,
-                u.id AS sender_id, u.username, u.name, u.picture AS avatar
+                u.id AS sender_id, u.username, u.avatar_url AS avatar
             FROM friendships f
             JOIN users u ON u.id = f.requester_id
             WHERE f.addressee_id = ? AND f.status = 'pending'
@@ -266,7 +264,7 @@ export const getFriendConquests = async (req: Request, res: Response) => {
             `SELECT * FROM conquests WHERE user_id = ? ORDER BY conquered_at DESC`, [userId]
         );
         const userR = await db.raw(
-            `SELECT username, name, picture AS avatar FROM users WHERE id = ?`, [userId]
+            `SELECT username, avatar_url AS avatar FROM users WHERE id = ?`, [userId]
         );
         const total: number = conquests.rows.length;
         res.json({ conquests: conquests.rows, total, rank: getRank(total), user: userR.rows[0] });
