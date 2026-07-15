@@ -1,6 +1,6 @@
-# CastleApp — Backend
+# Echoes&Paths — Backend
 
-REST API for **CastleApp**, a mobile app (Expo / React Native) for discovering, conquering and sharing historical places, monuments and points of interest around the world.
+REST API for **Echoes&Paths**, a mobile app (Expo / React Native) for discovering, conquering and sharing historical places, monuments and points of interest around the world.
 
 The backend acts as:
 
