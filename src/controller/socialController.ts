@@ -6,7 +6,7 @@ import db from '../config/db.js';
 // ==========================================
 export const searchUsers = async (req: Request, res: Response) => {
     const { q } = req.query;
-    const myId = 1; // ID FIJO TEMPORAL
+    const myId = req.userId;
 
     if (!q) return res.json([]);
 
@@ -37,7 +37,7 @@ export const searchUsers = async (req: Request, res: Response) => {
 // 2. SEGUIR A ALGUIEN
 // ==========================================
 export const followUser = async (req: Request, res: Response) => {
-    const follower_id = 1; // ID FIJO TEMPORAL
+    const follower_id = req.userId;
     const following_id = req.params.id;
 
     if (String(follower_id) === String(following_id)) {
@@ -60,7 +60,7 @@ export const followUser = async (req: Request, res: Response) => {
 // 3. DEJAR DE SEGUIR
 // ==========================================
 export const unfollowUser = async (req: Request, res: Response) => {
-    const follower_id = 1; // ID FIJO TEMPORAL
+    const follower_id = req.userId;
     const following_id = req.params.id;
 
     try {
@@ -78,7 +78,7 @@ export const unfollowUser = async (req: Request, res: Response) => {
 // 4. MARCAR LUGAR VISITADO (CHECK-IN)
 // ==========================================
 export const registerVisit = async (req: Request, res: Response) => {
-    const user_id = 1; // ID FIJO TEMPORAL
+    const user_id = req.userId;
     const location_id = req.params.locationId;
 
     try {
@@ -106,7 +106,7 @@ export const registerVisit = async (req: Request, res: Response) => {
 // 5. FEED SOCIAL (Actividad de Amigos)
 // ==========================================
 export const getSocialFeed = async (req: Request, res: Response) => {
-    const myId = 1; // ID FIJO TEMPORAL
+    const myId = req.userId;
 
     try {
         const feed = await db('visited_places as vp')
@@ -138,7 +138,7 @@ export const getSocialFeed = async (req: Request, res: Response) => {
 // 6. MIS VISITAS (Para el Mapa)
 // ==========================================
 export const getMyVisits = async (req: Request, res: Response) => {
-    const myId = 1; // ID FIJO TEMPORAL
+    const myId = req.userId;
     try {
         const places = await db('visited_places as vp')
             .join('historical_locations as l', 'vp.location_id', 'l.id')

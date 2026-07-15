@@ -67,9 +67,9 @@ router.get('/image-proxy', getProxyImage);
 // ==========================================
 // ZONA 4: ADMINISTRACIÓN (Moderación)
 // ==========================================
-router.get('/admin/pending', getPendingLocations);
-router.put('/admin/approve/:id', approveLocation);
-router.delete('/admin/reject/:id', rejectLocation);
+router.get('/admin/pending', verifyToken, getPendingLocations);
+router.put('/admin/approve/:id', verifyToken, approveLocation);
+router.delete('/admin/reject/:id', verifyToken, rejectLocation);
 
 // ==========================================
 // ZONA 5: APORTES DE LA COMUNIDAD (Detail)
@@ -79,9 +79,9 @@ router.get('/contributions', getContributionForPlace);
 router.get('/contributions/mine', verifyToken, getMyContribution);
 router.get('/contributions/my-discoveries', verifyToken, getMyDiscoveries);
 
-router.get('/admin/contributions/pending', getPendingContributions);
-router.put('/admin/contributions/approve/:id', approveContribution);
-router.delete('/admin/contributions/reject/:id', rejectContribution);
+router.get('/admin/contributions/pending', verifyToken, getPendingContributions);
+router.put('/admin/contributions/approve/:id', verifyToken, approveContribution);
+router.delete('/admin/contributions/reject/:id', verifyToken, rejectContribution);
 
 // ==========================================
 // CONQUISTAS
